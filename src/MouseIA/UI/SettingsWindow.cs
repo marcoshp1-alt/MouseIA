@@ -1,0 +1,830 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Shell;
+using MouseIA.Core;
+using MouseIA.Native;
+using MouseIA.Services;
+
+namespace MouseIA.UI;
+
+internal sealed class SettingsWindow : Window
+{
+    private readonly AppController _app;
+    private readonly AppSettings _draft;
+    private readonly Border _surface;
+    private readonly ContentControl _page = new();
+    private readonly StackPanel _nav = new();
+    private readonly TextBlock _savedNote;
+    private readonly Dictionary<string, Func<FrameworkElement>> _pages;
+    private readonly Dictionary<string, Clickable> _navButtons = new();
+    private string _current = "ai";
+
+    public SettingsWindow(AppController app, string? startPage = null)
+    {
+        _app = app;
+        _draft = app.Settings.Clone();
+        Title = Loc.T("settings_title");
+        Width = 860;
+        Height = 620;
+        MinWidth = 720;
+        MinHeight = 480;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.CanResize;
+        Background = Brushes.Transparent;
+        FontFamily = Theme.Font;
+        Foreground = Theme.Text;
+        UseLayoutRounding = true;
+        Icon = app.WindowIcon;
+        WindowChrome.SetWindowChrome(this, new WindowChrome
+        {
+            CaptionHeight = 0,
+            ResizeBorderThickness = new Thickness(6),
+            GlassFrameThickness = new Thickness(-1),
+            CornerRadius = new CornerRadius(0),
+            UseAeroCaptionButtons = false,
+        });
+
+        _pages = new()
+        {
+            ["ai"] = AiPage,
+            ["activation"] = ActivationPage,
+            ["voice"] = VoicePage,
+            ["general"] = GeneralPage,
+            ["about"] = AboutPage,
+        };
+
+        // ---- sidebar ----
+        var logo = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(18, 18, 18, 22) };
+        var mark = new Border
+        {
+            Width = 30,
+            Height = 30,
+            CornerRadius = new CornerRadius(9),
+            Background = Theme.Accent,
+            Child = Ui.Icon(Theme.Glyph.Mouse, 15, Brushes.White),
+            Effect = Theme.Glow(Theme.AccentA, 16, 0.5),
+        };
+        logo.Children.Add(mark);
+        var name = Ui.Label("MouseIA", 17, Theme.Text, FontWeights.SemiBold);
+        name.FontFamily = Theme.DisplayFont;
+        name.Margin = new Thickness(10, 0, 0, 2);
+        logo.Children.Add(name);
+        logo.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+
+        AddNav("ai", Theme.Glyph.Robot, Loc.T("nav_ai"));
+        AddNav("activation", Theme.Glyph.Mouse, Loc.T("nav_activation"));
+        AddNav("voice", Theme.Glyph.Globe, Loc.T("nav_voice"));
+        AddNav("general", Theme.Glyph.Settings, Loc.T("nav_general"));
+        AddNav("about", Theme.Glyph.Heart, Loc.T("nav_about"));
+
+        var sidebar = new DockPanel { Width = 220, Background = Theme.B("#0AFFFFFF") };
+        DockPanel.SetDock(logo, Dock.Top);
+        sidebar.Children.Add(logo);
+        var shortcut = Ui.Label(Loc.Format("sidebar_hint", app.Settings.Hotkey), 11.5, Theme.Faint);
+        shortcut.Margin = new Thickness(20, 0, 16, 18);
+        DockPanel.SetDock(shortcut, Dock.Bottom);
+        sidebar.Children.Add(shortcut);
+        sidebar.Children.Add(_nav);
+
+        // ---- top bar ----
+        var close = new IconButton(Theme.Glyph.Close, Loc.T("close"), 34, 11) { CornerRadius = new CornerRadius(8) };
+        close.Click += Close;
+        var topBar = new DockPanel { Height = 44, Background = Brushes.Transparent };
+        topBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+        DockPanel.SetDock(close, Dock.Right);
+        close.Margin = new Thickness(0, 6, 8, 0);
+        close.VerticalAlignment = VerticalAlignment.Top;
+        topBar.Children.Add(close);
+
+        // ---- bottom bar ----
+        var save = new PrimaryButton(Loc.T("save"), Theme.Glyph.Check);
+        save.Click += Save;
+        var cancel = new SecondaryButton(Loc.T("cancel"));
+        cancel.Click += Close;
+        cancel.Margin = new Thickness(0, 0, 10, 0);
+        _savedNote = Ui.Label("", 12.5, Theme.Success);
+        _savedNote.Margin = new Thickness(0, 0, 14, 0);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(_savedNote);
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(save);
+        var bottom = new Border
+        {
+            BorderBrush = Theme.Divider,
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(24, 12, 24, 14),
+            Child = buttons,
+        };
+
+        var scroll = new ScrollViewer
+        {
+            Content = _page,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Padding = new Thickness(32, 0, 32, 24),
+        };
+        var main = new DockPanel();
+        DockPanel.SetDock(topBar, Dock.Top);
+        DockPanel.SetDock(bottom, Dock.Bottom);
+        main.Children.Add(topBar);
+        main.Children.Add(bottom);
+        main.Children.Add(scroll);
+
+        var layout = new DockPanel();
+        DockPanel.SetDock(sidebar, Dock.Left);
+        layout.Children.Add(sidebar);
+        layout.Children.Add(new Border { Width = 1, Background = Theme.Divider });
+        layout.Children.Add(main);
+        DockPanel.SetDock(layout.Children[1], Dock.Left);
+
+        _surface = new Border
+        {
+            Background = Theme.WindowFallback,
+            BorderBrush = Theme.GlassStroke,
+            BorderThickness = new Thickness(1),
+            Child = layout,
+        };
+        Content = _surface;
+
+        SourceInitialized += (_, _) => ApplyBackdrop();
+        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        ShowPage(startPage ?? (app.Settings.HasAi ? "ai" : "ai"));
+    }
+
+    /// <summary>Real acrylic on Windows 11; a solid dark surface elsewhere.</summary>
+    private void ApplyBackdrop()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        int dark = 1;
+        Win32.DwmSetWindowAttribute(hwnd, Win32.DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+        int round = 2; // DWMWCP_ROUND
+        Win32.DwmSetWindowAttribute(hwnd, Win32.DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
+        if (Environment.OSVersion.Version.Build >= 22621)
+        {
+            int acrylic = 3; // DWMSBT_TRANSIENTWINDOW
+            if (Win32.DwmSetWindowAttribute(hwnd, Win32.DWMWA_SYSTEMBACKDROP_TYPE, ref acrylic, sizeof(int)) == 0)
+            {
+                if (HwndSource.FromHwnd(hwnd) is { CompositionTarget: { } target })
+                    target.BackgroundColor = Colors.Transparent;
+                _surface.Background = Theme.Vertical(Theme.C("#A6141826"), Theme.C("#C00B0E17"));
+                _surface.BorderThickness = new Thickness(0);
+            }
+        }
+    }
+
+    private void AddNav(string key, string glyph, string label)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        var icon = Ui.Icon(glyph, 14, Theme.Muted);
+        icon.Width = 20;
+        row.Children.Add(icon);
+        var text = Ui.Label(label, 13.5);
+        text.Margin = new Thickness(10, 0, 0, 1);
+        row.Children.Add(text);
+        var button = new Clickable
+        {
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(12, 9, 12, 9),
+            Margin = new Thickness(10, 0, 10, 2),
+            Child = row,
+        };
+        button.Click += () => ShowPage(key);
+        _navButtons[key] = button;
+        _nav.Children.Add(button);
+    }
+
+    private void ShowPage(string key)
+    {
+        _current = key;
+        foreach (var (k, button) in _navButtons)
+        {
+            bool on = k == key;
+            button.NormalBrush = on ? Theme.Hover : Brushes.Transparent;
+            if (button.Child is StackPanel row && row.Children[0] is TextBlock icon)
+                icon.Foreground = on ? Theme.Accent : Theme.Muted;
+        }
+        _page.Content = _pages[key]();
+        if (_page.Content is FrameworkElement element) Ui.PopIn(element, 0.99);
+    }
+
+    // ---- building blocks ----
+
+    private static StackPanel Page(string title, string subtitle)
+    {
+        var page = new StackPanel { MaxWidth = 620, HorizontalAlignment = HorizontalAlignment.Left };
+        var heading = Ui.Label(title, 24, Theme.Text, FontWeights.SemiBold);
+        heading.FontFamily = Theme.DisplayFont;
+        page.Children.Add(heading);
+        var sub = Ui.Label(subtitle, 13, Theme.Muted);
+        sub.Margin = new Thickness(0, 4, 0, 18);
+        page.Children.Add(sub);
+        return page;
+    }
+
+    private static Border Section(params UIElement[] children)
+    {
+        var stack = new StackPanel();
+        foreach (var child in children) stack.Children.Add(child);
+        return new Border
+        {
+            Background = Theme.B("#0DFFFFFF"),
+            BorderBrush = Theme.Divider,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(16),
+            Padding = new Thickness(18, 14, 18, 16),
+            Margin = new Thickness(0, 0, 0, 14),
+            Child = stack,
+        };
+    }
+
+    private static FrameworkElement Field(string label, string? help, UIElement control)
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 4, 0, 10) };
+        stack.Children.Add(Ui.Label(label, 13, Theme.Text, FontWeights.SemiBold));
+        if (help != null)
+        {
+            var h = Ui.Label(help, 12, Theme.Muted);
+            h.Margin = new Thickness(0, 2, 0, 0);
+            stack.Children.Add(h);
+        }
+        if (control is FrameworkElement fe) fe.Margin = new Thickness(0, 8, 0, 0);
+        stack.Children.Add(control);
+        return stack;
+    }
+
+    private static FrameworkElement ToggleRow(string label, string? help, bool value, Action<bool> changed)
+    {
+        var toggle = new ToggleSwitch(value) { VerticalAlignment = VerticalAlignment.Center };
+        toggle.Changed += changed;
+        var text = new StackPanel { Margin = new Thickness(0, 0, 16, 0) };
+        text.Children.Add(Ui.Label(label, 13, Theme.Text, FontWeights.SemiBold));
+        if (help != null)
+        {
+            var h = Ui.Label(help, 12, Theme.Muted);
+            h.Margin = new Thickness(0, 2, 0, 0);
+            text.Children.Add(h);
+        }
+        var row = new DockPanel { Margin = new Thickness(0, 6, 0, 8) };
+        DockPanel.SetDock(toggle, Dock.Right);
+        row.Children.Add(toggle);
+        row.Children.Add(text);
+        return row;
+    }
+
+    private static Slider DarkSlider(double min, double max, double value, double step) => new()
+    {
+        Minimum = min,
+        Maximum = max,
+        Value = value,
+        TickFrequency = step,
+        IsSnapToTickEnabled = true,
+        Width = 260,
+        HorizontalAlignment = HorizontalAlignment.Left,
+        Foreground = Theme.Accent,
+    };
+
+    private static TextBlock Link(string text, string url)
+    {
+        var link = Ui.Label(text, 12.5, Theme.B("#7DE6F5"));
+        link.Cursor = Cursors.Hand;
+        link.TextDecorations = TextDecorations.Underline;
+        link.MouseLeftButtonUp += (_, _) => OpenUrl(url);
+        return link;
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex) { Log.Write($"Open {url}: {ex.Message}"); }
+    }
+
+    // ---- pages ----
+
+    private FrameworkElement AiPage()
+    {
+        var page = Page(Loc.T("nav_ai"), Loc.T("ai_subtitle"));
+        var details = new ContentControl();
+
+        var cards = new UniformGrid2(2);
+        var providerButtons = new Dictionary<string, Clickable>();
+        void SelectProvider(string id)
+        {
+            _draft.Provider = id;
+            foreach (var (key, button) in providerButtons)
+            {
+                bool on = key == id;
+                button.BorderBrush = on ? Theme.Accent : Theme.FieldStroke;
+                button.BorderThickness = new Thickness(on ? 1.5 : 1);
+                button.NormalBrush = on ? Theme.B("#1A8B5CF6") : Theme.Field;
+            }
+            details.Content = id == ProviderIds.Local ? LocalDetails() : CloudDetails(id);
+        }
+        foreach (var (id, glyph, title, help) in new[]
+                 {
+                     (ProviderIds.Gemini, Theme.Glyph.Cloud, "Gemini", Loc.T("gemini_help")),
+                     (ProviderIds.OpenAi, Theme.Glyph.Cloud, "ChatGPT", Loc.T("openai_help")),
+                     (ProviderIds.Claude, Theme.Glyph.Cloud, "Claude", Loc.T("claude_help")),
+                     (ProviderIds.Local, Theme.Glyph.Pc, Loc.T("local_ai"), Loc.T("local_help")),
+                 })
+        {
+            var text = new StackPanel();
+            var head = new StackPanel { Orientation = Orientation.Horizontal };
+            var icon = Ui.Icon(glyph, 14, Theme.Accent);
+            icon.Margin = new Thickness(0, 0, 8, 0);
+            head.Children.Add(icon);
+            head.Children.Add(Ui.Label(title, 14, Theme.Text, FontWeights.SemiBold));
+            text.Children.Add(head);
+            var helpText = Ui.Label(help, 12, Theme.Muted);
+            helpText.Margin = new Thickness(0, 4, 0, 0);
+            text.Children.Add(helpText);
+            var card = new Clickable
+            {
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(14, 12, 14, 12),
+                Margin = new Thickness(0, 0, 10, 10),
+                BorderThickness = new Thickness(1),
+                Child = text,
+            };
+            var captured = id;
+            card.Click += () => SelectProvider(captured);
+            providerButtons[id] = card;
+            cards.Add(card);
+        }
+        page.Children.Add(Section(Ui.Label(Loc.T("choose_ai"), 13, Theme.Text, FontWeights.SemiBold), Spacer(10), cards));
+        page.Children.Add(details);
+        SelectProvider(_draft.Provider);
+        return page;
+    }
+
+    private static FrameworkElement Spacer(double height) => new Border { Height = height };
+
+    private FrameworkElement CloudDetails(string provider)
+    {
+        var (keyUrl, keyHint) = provider switch
+        {
+            ProviderIds.OpenAi => ("https://platform.openai.com/api-keys", "sk-..."),
+            ProviderIds.Claude => ("https://platform.claude.com/settings/keys", "sk-ant-..."),
+            _ => ("https://aistudio.google.com/apikey", "AIza..."),
+        };
+        var key = new SecretField(keyHint, _draft.KeyFor(provider));
+        void StoreKey()
+        {
+            switch (provider)
+            {
+                case ProviderIds.OpenAi: _draft.OpenAiKey = key.Value; break;
+                case ProviderIds.Claude: _draft.ClaudeKey = key.Value; break;
+                default: _draft.GeminiKey = key.Value; break;
+            }
+        }
+        key.Changed += StoreKey;
+
+        var keyLink = Link(Loc.T("get_key"), keyUrl);
+        keyLink.Margin = new Thickness(0, 6, 0, 0);
+        var quality = new Segmented(new[]
+        {
+            ("fast", Loc.T("quality_fast")),
+            ("balanced", Loc.T("quality_balanced")),
+            ("smart", Loc.T("quality_smart")),
+        }, _draft.Quality);
+        quality.Changed += q => _draft.Quality = q;
+
+        var status = Ui.Label("", 12.5, Theme.Muted);
+        status.Margin = new Thickness(12, 0, 0, 0);
+        var test = new SecondaryButton(Loc.T("test_connection"), Theme.Glyph.Play);
+        test.Click += () =>
+        {
+            StoreKey();
+            _ = TestAsync(status);
+        };
+        var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        testRow.Children.Add(test);
+        testRow.Children.Add(status);
+
+        var keyBlock = new StackPanel();
+        keyBlock.Children.Add(key);
+        keyBlock.Children.Add(keyLink);
+        return Section(
+            Field(Loc.Format("api_key_for", ModelCatalog.DisplayName(provider)), Loc.T("api_key_help"), keyBlock),
+            Field(Loc.T("quality"), Loc.T("quality_help"), quality),
+            testRow);
+    }
+
+    private FrameworkElement LocalDetails()
+    {
+        var url = new GlassField("http://127.0.0.1:11434/v1", _draft.LocalUrl);
+        url.Box.TextChanged += (_, _) => _draft.LocalUrl = url.Text.Trim();
+        var model = new Picker(Array.Empty<Picker.Item>(), _draft.LocalModel);
+        if (string.IsNullOrEmpty(_draft.LocalModel)) model.SetPlaceholder(Loc.T("pick_model"));
+        model.Changed += m => _draft.LocalModel = m;
+        var found = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var status = Ui.Label("", 12.5, Theme.Muted);
+        status.Margin = new Thickness(12, 0, 0, 0);
+
+        async Task LoadModels(bool scanAll)
+        {
+            status.Foreground = Theme.Muted;
+            status.Text = Loc.T("searching");
+            found.Children.Clear();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            var servers = scanAll
+                ? await LocalAiDiscovery.DetectAsync(_draft.LocalUrl, cts.Token)
+                : new List<LocalServer>();
+            if (!scanAll)
+            {
+                var models = await LocalAiDiscovery.ListModelsAsync(_draft.LocalUrl, _draft.LocalKey, cts.Token);
+                if (models != null) servers = new[] { new LocalServer(Loc.T("this_server"), _draft.LocalUrl, models) };
+            }
+            if (servers.Count == 0)
+            {
+                status.Foreground = Theme.Danger;
+                status.Text = Loc.T("no_local_server");
+                return;
+            }
+            // Prefer the server already chosen; otherwise the first one found.
+            var current = servers.FirstOrDefault(s => LocalAiDiscovery.Normalize(s.BaseUrl) == LocalAiDiscovery.Normalize(_draft.LocalUrl))
+                          ?? servers[0];
+            void UseServer(LocalServer server)
+            {
+                _draft.LocalUrl = server.BaseUrl;
+                if (url.Text != server.BaseUrl) url.Text = server.BaseUrl;
+                var items = server.Models.Select(m => new Picker.Item(m, m)).ToList();
+                if (!server.Models.Contains(_draft.LocalModel))
+                    _draft.LocalModel = server.Models.FirstOrDefault(m => LooksMultimodal(m)) ?? server.Models.FirstOrDefault() ?? "";
+                model.SetItems(items, _draft.LocalModel);
+                status.Foreground = Theme.Success;
+                status.Text = Loc.Format("server_found", server.Name, server.Models.Count);
+            }
+            foreach (var server in servers)
+            {
+                var chip = new SecondaryButton($"{server.Name} · {server.Models.Count}", Theme.Glyph.Pc) { Height = 30, Margin = new Thickness(0, 0, 8, 6) };
+                var captured = server;
+                chip.Click += () => UseServer(captured);
+                found.Children.Add(chip);
+            }
+            UseServer(current);
+        }
+
+        var detect = new SecondaryButton(Loc.T("detect"), Theme.Glyph.Search);
+        detect.Click += () => _ = LoadModels(scanAll: true);
+        var refresh = new IconButton(Theme.Glyph.Refresh, Loc.T("refresh_models"), 34, 12) { Margin = new Thickness(8, 0, 0, 0) };
+        refresh.Click += () => _ = LoadModels(scanAll: false);
+        var detectRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        detectRow.Children.Add(detect);
+        detectRow.Children.Add(status);
+        var modelRow = new DockPanel();
+        DockPanel.SetDock(refresh, Dock.Right);
+        modelRow.Children.Add(refresh);
+        modelRow.Children.Add(model);
+
+        var key = new SecretField(Loc.T("optional"), _draft.LocalKey);
+        key.Changed += () => _draft.LocalKey = key.Value;
+
+        var testStatus = Ui.Label("", 12.5, Theme.Muted);
+        testStatus.Margin = new Thickness(12, 0, 0, 0);
+        var test = new SecondaryButton(Loc.T("test_connection"), Theme.Glyph.Play);
+        test.Click += () => _ = TestAsync(testStatus);
+        var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        testRow.Children.Add(test);
+        testRow.Children.Add(testStatus);
+
+        var serverBlock = new StackPanel();
+        serverBlock.Children.Add(url);
+        serverBlock.Children.Add(detectRow);
+        serverBlock.Children.Add(found);
+
+        var help = new StackPanel();
+        help.Children.Add(Ui.Label(Loc.T("local_howto"), 12.5, Theme.Muted));
+        var links = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        foreach (var (label, link) in new[] { ("Ollama", "https://ollama.com/download"), ("LM Studio", "https://lmstudio.ai"), ("llama.cpp", "https://github.com/ggml-org/llama.cpp") })
+        {
+            var l = Link(label, link);
+            l.Margin = new Thickness(0, 0, 16, 0);
+            links.Children.Add(l);
+        }
+        help.Children.Add(links);
+
+        // Detect right away so the model list is ready.
+        Dispatcher.BeginInvoke(() => _ = LoadModels(scanAll: true));
+        return new StackPanel
+        {
+            Children =
+            {
+                Section(
+                    Field(Loc.T("local_server"), Loc.T("local_server_help"), serverBlock),
+                    Field(Loc.T("local_model"), Loc.T("local_model_help"), modelRow),
+                    Field(Loc.T("local_key"), Loc.T("local_key_help"), key),
+                    testRow),
+                Section(help),
+            },
+        };
+    }
+
+    private static bool LooksMultimodal(string model)
+    {
+        var m = model.ToLowerInvariant();
+        return m.Contains("gemma3") || m.Contains("gemma4") || m.Contains("vl") || m.Contains("llava") || m.Contains("vision") ||
+               m.Contains("minicpm-v") || m.Contains("moondream") || m.Contains("pixtral") || m.Contains("llama4") || m.Contains("mistral-small");
+    }
+
+    private async Task TestAsync(TextBlock status)
+    {
+        status.Foreground = Theme.Muted;
+        status.Text = Loc.T("testing");
+        if (!_draft.HasAi)
+        {
+            status.Foreground = Theme.Danger;
+            status.Text = Loc.T(_draft.Provider == ProviderIds.Local ? "no_local_server" : "missing_key");
+            return;
+        }
+        var request = new AiRequest
+        {
+            Provider = _draft.Provider,
+            ApiKey = _draft.KeyFor(_draft.Provider),
+            BaseUrl = _draft.LocalUrl,
+            Models = ModelCatalog.ModelsFor(_draft),
+            SystemPrompt = "Reply with exactly: OK",
+            History = new[] { new ChatTurn(true, "Say OK.") },
+            MaxOutputTokens = 64,
+        };
+        var watch = Stopwatch.StartNew();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            var result = await Task.Run(() => AiClient.StreamAsync(request, _ => { }, cts.Token));
+            status.Foreground = Theme.Success;
+            status.Text = Loc.Format("test_ok", result.Model, watch.Elapsed.TotalSeconds.ToString("0.0"));
+        }
+        catch (AiException ex)
+        {
+            status.Foreground = Theme.Danger;
+            status.Text = ex.Kind switch
+            {
+                AiErrorKind.InvalidKey => Loc.T("test_bad_key"),
+                AiErrorKind.Network when _draft.Provider == ProviderIds.Local => Loc.T("no_local_server"),
+                AiErrorKind.Network => Loc.T("test_no_internet"),
+                AiErrorKind.ModelMissing => Loc.T("test_no_model"),
+                AiErrorKind.NoCredit => Loc.T("test_no_credit"),
+                AiErrorKind.RateLimit => Loc.T("test_rate"),
+                _ => ex.Detail.Length > 140 ? ex.Detail[..140] + "…" : ex.Detail,
+            };
+        }
+        catch (Exception ex)
+        {
+            status.Foreground = Theme.Danger;
+            status.Text = ex.Message;
+        }
+    }
+
+    private FrameworkElement ActivationPage()
+    {
+        var page = Page(Loc.T("nav_activation"), Loc.T("activation_subtitle"));
+        page.Children.Add(Section(Field(Loc.T("hotkey"), Loc.T("hotkey_help"), new HotkeyBox(_draft.Hotkey, h => _draft.Hotkey = h, _app))));
+
+        var sensitivity = DarkSlider(1, 10, _draft.ShakeSensitivity, 1);
+        sensitivity.ValueChanged += (_, e) => _draft.ShakeSensitivity = (int)e.NewValue;
+        var scale = new DockPanel { Width = 260, HorizontalAlignment = HorizontalAlignment.Left };
+        var low = Ui.Label(Loc.T("strong_shake"), 11.5, Theme.Faint);
+        var high = Ui.Label(Loc.T("light_shake"), 11.5, Theme.Faint);
+        DockPanel.SetDock(high, Dock.Right);
+        scale.Children.Add(high);
+        scale.Children.Add(low);
+        var sensitivityBlock = new StackPanel();
+        sensitivityBlock.Children.Add(sensitivity);
+        sensitivityBlock.Children.Add(scale);
+        page.Children.Add(Section(
+            ToggleRow(Loc.T("shake"), Loc.T("shake_help"), _draft.Shake, v => _draft.Shake = v),
+            Field(Loc.T("sensitivity"), null, sensitivityBlock),
+            ToggleRow(Loc.T("fullscreen_off"), Loc.T("fullscreen_off_help"), _draft.DisableInFullscreen, v => _draft.DisableInFullscreen = v)));
+        page.Children.Add(Section(
+            ToggleRow(Loc.T("type_to_ask"), Loc.T("type_to_ask_help"), _draft.TypeToAsk, v => _draft.TypeToAsk = v)));
+        return page;
+    }
+
+    private FrameworkElement VoicePage()
+    {
+        var page = Page(Loc.T("nav_voice"), Loc.T("voice_subtitle"));
+        var languageItems = new List<Picker.Item> { new("auto", Loc.T("windows_language")) };
+        languageItems.AddRange(Languages.All
+            .OrderBy(l => Loc.IsPortuguese ? l.Portuguese : l.English, StringComparer.CurrentCulture)
+            .Select(l => new Picker.Item(l.Code, Loc.IsPortuguese ? l.Portuguese : l.English, l.Native)));
+        var target = new Picker(languageItems, _draft.TranslateTo) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        target.Changed += c => _draft.TranslateTo = c;
+        var mic = new Picker(languageItems, _draft.VoiceInputLanguage) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        mic.Changed += c => _draft.VoiceInputLanguage = c;
+        var rate = DarkSlider(0.5, 2.0, _draft.VoiceRate, 0.1);
+        rate.ValueChanged += (_, e) => _draft.VoiceRate = Math.Round(e.NewValue, 1);
+
+        var voices = SpeechService.Voices;
+        var voiceList = string.Join(", ", voices.Select(v => v.Language).Distinct().OrderBy(l => l));
+        var voiceInfo = Ui.Label(voices.Count == 0 ? Loc.T("no_voices") : Loc.Format("voices_installed", voices.Count, voiceList), 12, Theme.Muted);
+        var install = new SecondaryButton(Loc.T("install_voices"), Theme.Glyph.Add);
+        install.Click += () => OpenUrl("ms-settings:regionlanguage");
+        var speech = new SecondaryButton(Loc.T("speech_settings"), Theme.Glyph.Mic) { Margin = new Thickness(8, 0, 0, 0) };
+        speech.Click += () => OpenUrl("ms-settings:speech");
+        var testVoice = new SecondaryButton(Loc.T("test_voice"), Theme.Glyph.Volume) { Margin = new Thickness(8, 0, 0, 0) };
+        testVoice.Click += async () =>
+        {
+            var lang = Languages.Resolve(_draft.TranslateTo, Loc.Culture);
+            if (!await SpeechService.SpeakAsync(Loc.T("voice_sample"), Loc.IsPortuguese ? "pt-BR" : "en-US", _draft.VoiceRate))
+                voiceInfo.Text = Loc.Format("no_voice", lang.Display(Loc.IsPortuguese));
+        };
+        var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+        buttons.Children.Add(install);
+        buttons.Children.Add(speech);
+        buttons.Children.Add(testVoice);
+
+        page.Children.Add(Section(
+            Field(Loc.T("translate_to"), Loc.T("translate_to_help"), target),
+            ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => _draft.SpeakTranslation = v)));
+        page.Children.Add(Section(
+            Field(Loc.T("mic_language"), Loc.T("mic_language_help"), mic),
+            Field(Loc.T("voice_rate"), null, rate),
+            voiceInfo,
+            buttons));
+        return page;
+    }
+
+    private FrameworkElement GeneralPage()
+    {
+        var page = Page(Loc.T("nav_general"), Loc.T("general_subtitle"));
+        var ui = new Segmented(new[] { ("auto", Loc.T("automatic")), ("pt", "Português"), ("en", "English") }, _draft.UiLanguage);
+        ui.Changed += v => _draft.UiLanguage = v;
+        page.Children.Add(Section(
+            Field(Loc.T("ui_language"), Loc.T("ui_language_help"), ui),
+            ToggleRow(Loc.T("start_with_windows"), null, _draft.StartWithWindows, v => _draft.StartWithWindows = v)));
+        page.Children.Add(Section(
+            ToggleRow(Loc.T("auto_ocr"), Loc.T("auto_ocr_help"), _draft.AutoOcr, v => _draft.AutoOcr = v),
+            ToggleRow(Loc.T("auto_qr"), Loc.T("auto_qr_help"), _draft.AutoQr, v => _draft.AutoQr = v)));
+        var folder = new SecondaryButton(Loc.T("open_data_folder"), Theme.Glyph.Folder);
+        folder.Click += () => OpenUrl(AppSettings.DefaultFolder);
+        var ocr = Ui.Label(Loc.Format("ocr_languages", SafeOcrLanguages()), 12, Theme.Muted);
+        ocr.Margin = new Thickness(0, 0, 0, 10);
+        page.Children.Add(Section(ocr, folder));
+        return page;
+    }
+
+    private static string SafeOcrLanguages()
+    {
+        try { return OcrService.LanguagesSummary(); }
+        catch (Exception) { return "—"; }
+    }
+
+    private FrameworkElement AboutPage()
+    {
+        var page = Page("MouseIA", Loc.Format("version", Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0"));
+        page.Children.Add(Section(
+            Ui.Label(Loc.T("about_text"), 13, Theme.Text),
+            Spacer(10),
+            Ui.Label(Loc.T("made_by"), 13, Theme.Text, FontWeights.SemiBold),
+            Spacer(6),
+            Links(("YouTube", "https://www.youtube.com/@odorizzioficial"),
+                  ("GitHub", "https://github.com/odorizzioficial"),
+                  ("Instagram", "https://www.instagram.com/odorizzidicas"),
+                  ("TikTok", "https://www.tiktok.com/@odorizzioficial"))));
+        page.Children.Add(Section(
+            Ui.Label(Loc.T("credits_title"), 13, Theme.Text, FontWeights.SemiBold),
+            Spacer(4),
+            Ui.Label(Loc.T("credits_text"), 12.5, Theme.Muted),
+            Spacer(6),
+            Links(("Magic Pointer", "https://github.com/rono-zeroseven/magic-pointer"),
+                  ("ZXing.Net (Apache 2.0)", "https://github.com/micjahn/ZXing.Net"))));
+        var quit = new SecondaryButton(Loc.T("quit"), Theme.Glyph.Power);
+        quit.Click += () => _app.Exit();
+        page.Children.Add(quit);
+        return page;
+    }
+
+    private static WrapPanel Links(params (string Label, string Url)[] links)
+    {
+        var panel = new WrapPanel();
+        foreach (var (label, url) in links)
+        {
+            var link = Link(label, url);
+            link.Margin = new Thickness(0, 0, 16, 4);
+            panel.Children.Add(link);
+        }
+        return panel;
+    }
+
+    // ---- saving ----
+
+    private void Save()
+    {
+        _app.ApplySettings(_draft);
+        _savedNote.Text = Loc.T("saved");
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+        timer.Tick += (_, _) => { _savedNote.Text = ""; timer.Stop(); };
+        timer.Start();
+    }
+}
+
+/// <summary>Simple grid that flows children into N columns.</summary>
+internal sealed class UniformGrid2 : Grid
+{
+    private readonly int _columns;
+
+    public UniformGrid2(int columns)
+    {
+        _columns = columns;
+        for (int i = 0; i < columns; i++) ColumnDefinitions.Add(new ColumnDefinition());
+    }
+
+    public void Add(UIElement element)
+    {
+        int index = Children.Count;
+        int row = index / _columns;
+        while (RowDefinitions.Count <= row) RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        SetRow(element, row);
+        SetColumn(element, index % _columns);
+        Children.Add(element);
+    }
+}
+
+/// <summary>Click, then press the new shortcut.</summary>
+internal sealed class HotkeyBox : Clickable
+{
+    private readonly TextBlock _label;
+    private readonly Action<string> _changed;
+    private readonly AppController _app;
+    private string _value;
+    private bool _capturing;
+
+    public HotkeyBox(string value, Action<string> changed, AppController app)
+    {
+        _value = value;
+        _changed = changed;
+        _app = app;
+        Height = 38;
+        Width = 260;
+        HorizontalAlignment = HorizontalAlignment.Left;
+        CornerRadius = new CornerRadius(12);
+        NormalBrush = Theme.Field;
+        BorderBrush = Theme.FieldStroke;
+        BorderThickness = new Thickness(1);
+        Padding = new Thickness(12, 0, 12, 0);
+        var icon = Ui.Icon(Theme.Glyph.Keyboard, 14, Theme.Muted);
+        icon.Margin = new Thickness(0, 0, 10, 0);
+        _label = Ui.Label(value, 13.5, Theme.Text, FontWeights.SemiBold);
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(icon);
+        row.Children.Add(_label);
+        Child = row;
+        Click += Begin;
+        LostKeyboardFocus += (_, _) => End();
+    }
+
+    private void Begin()
+    {
+        _capturing = true;
+        _app.SuspendHotkey(true);
+        BorderBrush = Theme.Accent;
+        _label.Text = Loc.T("press_keys");
+        _label.Foreground = Theme.Muted;
+        Focus();
+        Keyboard.Focus(this);
+    }
+
+    private void End()
+    {
+        if (!_capturing) return;
+        _capturing = false;
+        _app.SuspendHotkey(false);
+        BorderBrush = Theme.FieldStroke;
+        _label.Text = _value;
+        _label.Foreground = Theme.Text;
+    }
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        if (!_capturing)
+        {
+            base.OnPreviewKeyDown(e);
+            return;
+        }
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.Escape) { End(); return; }
+        if (HotkeyText.IsModifierKey(key)) return;
+        var modifiers = Keyboard.Modifiers;
+        if (Keyboard.IsKeyDown(Key.LWin) || Keyboard.IsKeyDown(Key.RWin)) modifiers |= ModifierKeys.Windows;
+        if (modifiers == ModifierKeys.None || modifiers == ModifierKeys.Shift)
+        {
+            _label.Text = Loc.T("needs_modifier");
+            return;
+        }
+        _value = HotkeyText.Format(modifiers, key);
+        _changed(_value);
+        End();
+    }
+}

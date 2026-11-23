@@ -1,0 +1,63 @@
+name: Build MouseIA
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = '1.0.0'
+          if ('${{ github.ref_type }}' -eq 'tag') { $v = '${{ github.ref_name }}'.TrimStart('v') }
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Core tests
+        shell: pwsh
+        run: |
+          $mock = Start-Process python -ArgumentList 'tools/mock_ai.py','18765' -PassThru -NoNewWindow
+          Start-Sleep -Seconds 2
+          dotnet run --project tests/CoreTests -c Release -- http://127.0.0.1:18765
+          $code = $LASTEXITCODE
+          Stop-Process -Id $mock.Id -Force
+          exit $code
+
+      - name: Publish (single self-contained exe)
+        run: dotnet publish src/MouseIA/MouseIA.csproj -c Release -o publish -p:Version=${{ steps.version.outputs.value }}
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=${{ steps.version.outputs.value }}" installer\MouseIA.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item publish\MouseIA.exe "installer\Output\MouseIA-Portable-${{ steps.version.outputs.value }}.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MouseIA-${{ steps.version.outputs.value }}
+          path: installer/Output/*.exe
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/*.exe
+          generate_release_notes: true
