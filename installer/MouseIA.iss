@@ -1,7 +1,7 @@
 ; MouseIA installer (Inno Setup 6). Installs per user: no administrator rights needed.
 #define AppName "MouseIA"
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.1.0"
 #endif
 
 [Setup]

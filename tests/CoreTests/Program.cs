@@ -119,6 +119,22 @@ static class P
         }
         Check(DocumentText.Extract(docx) == "Olá mundo\nLinha 2", "docx text: " + DocumentText.Extract(docx));
 
+        // Translation echo detection
+        var src = "Keep your computer clean and fast with Total PC Cleaner. It lets you clean your PC's cache and big files.";
+        Check(Prompts.LooksUntranslated(src, src), "echo detected");
+        Check(Prompts.LooksUntranslated(src, "Keep your computer clean and fast with Total PC Cleaner. It lets you clean your PC cache and big files!"), "near-echo detected");
+        Check(!Prompts.LooksUntranslated(src, "Mantenha seu computador limpo e rápido com o Total PC Cleaner. Ele permite limpar o cache e arquivos grandes do seu PC."), "real translation accepted");
+        Check(!Prompts.LooksUntranslated("Hello there", "Hello there"), "short text not judged");
+        var pt = Languages.Find("pt-BR")!;
+        var treq = Prompts.TranslateRequest(pt, src, true);
+        Check(treq.Contains("<<<") && treq.Contains("Portuguese (Brazil)") && !Prompts.TranslateSystem(pt).Contains("unchanged"), "translate prompt shape");
+        // Settings defaults for new options
+        var defs = new AppSettings();
+        Check(defs.GlassEffect && defs.GlassOpacity == 0.85 && defs.LocalMode == "file", "new defaults");
+        Check(!new AppSettings { Provider = "local", LocalMode = "file" }.HasAi && new AppSettings { Provider = "local", LocalMode = "file", LocalModelFile = "x.gguf" }.HasAi, "HasAi for model file");
+        var n = new AppSettings { GlassOpacity = 5, LocalMode = "zzz", LocalBackend = "x" }; n.Normalize();
+        Check(n.GlassOpacity == 1.0 && n.LocalMode == "file" && n.LocalBackend == "auto", "normalize new options");
+
         Console.WriteLine(failed == 0 ? "ALL PASSED" : failed + " FAILED");
         return failed == 0 ? 0 : 1;
     }

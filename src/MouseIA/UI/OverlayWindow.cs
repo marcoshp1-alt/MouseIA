@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,8 +16,9 @@ using MouseIA.Services;
 namespace MouseIA.UI;
 
 /// <summary>
-/// Full-monitor layer over a frozen screenshot: point at a window or drag an area,
-/// then the card opens next to the selection.
+/// The pointer layer over a frozen picture of the screen. A ripple spreads from the cursor,
+/// the cursor turns into a glowing star, and whatever is under it (a paragraph, button,
+/// image or window) is outlined in light. Click to pick it, drag to pick an area, or type.
 /// </summary>
 internal sealed class OverlayWindow : Window
 {
@@ -26,21 +28,26 @@ internal sealed class OverlayWindow : Window
     private readonly AppSettings _settings;
     private readonly Canvas _root = new();
     private readonly Image _screen = new() { Stretch = Stretch.Fill };
-    private readonly Path _dim;
-    private readonly RectangleGeometry _hole = new() { RadiusX = 14, RadiusY = 14 };
-    private readonly RectangleGeometry _full = new();
+    private readonly ScaleTransform _screenPulse = new(1, 1);
     private readonly Border _frame;
     private readonly Border _hint;
+    private readonly Canvas _pointer;
+    private readonly List<FrameworkElement> _trail = new();
     private readonly DispatcherTimer _idle;
+    private ElementProbe? _probe;
     private CardView? _card;
     private Mode _mode = Mode.Pointing;
     private Point _dragStart;
+    private Point _lastTrail;
     private bool _mouseDown;
+    private bool _dragging;
+    private bool _hintFollows = true;
     private Rect _hover = Rect.Empty;
     private Rect _selection = Rect.Empty;
     private double _scale = 1;
     private bool _modalOpen;
     private bool _closing;
+    private RectProxy? _frameProxy;
 
     public ScreenShot Shot { get; }
     public double ScreenWidthDip => Shot.Bounds.Width / _scale;
@@ -66,32 +73,30 @@ internal sealed class OverlayWindow : Window
         Height = 10;
         FontFamily = Theme.Font;
         UseLayoutRounding = true;
-        Cursor = Cursors.Cross;
+        Cursor = Cursors.None;
         AllowDrop = true;
 
         _screen.Source = shot.Image;
-        RenderOptions.SetBitmapScalingMode(_screen, BitmapScalingMode.NearestNeighbor);
-        _dim = new Path
-        {
-            Fill = Theme.B("#8C05070D"),
-            Data = new CombinedGeometry(GeometryCombineMode.Exclude, _full, _hole),
-            IsHitTestVisible = false,
-        };
+        _screen.RenderTransform = _screenPulse;
+        RenderOptions.SetBitmapScalingMode(_screen, BitmapScalingMode.HighQuality);
+
         _frame = new Border
         {
             BorderThickness = new Thickness(2),
-            CornerRadius = new CornerRadius(14),
-            BorderBrush = Theme.AnimatedAurora(),
-            Effect = Theme.Glow(Theme.AccentA, 28, 0.85),
+            CornerRadius = new CornerRadius(12),
+            BorderBrush = Theme.PointerStroke,
+            Background = Theme.B("#0E9FD0FF"),
+            Effect = Theme.Glow(Theme.PointerGlow, 26, 0.95),
             IsHitTestVisible = false,
             Visibility = Visibility.Collapsed,
         };
         _hint = BuildHint();
+        _pointer = BuildPointer();
 
         _root.Children.Add(_screen);
-        _root.Children.Add(_dim);
         _root.Children.Add(_frame);
         _root.Children.Add(_hint);
+        _root.Children.Add(_pointer);
         Content = _root;
 
         _idle = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
@@ -105,39 +110,42 @@ internal sealed class OverlayWindow : Window
         Drop += (_, e) => OnFileDrop(e);
     }
 
+    private IntPtr Handle => new WindowInteropHelper(this).Handle;
+
     private void PlaceOnMonitor()
     {
-        var hwnd = new WindowInteropHelper(this).Handle;
         var b = Shot.Bounds;
-        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, b.X, b.Y, b.Width, b.Height, Win32.SWP_SHOWWINDOW);
-        uint dpi = Win32.GetDpiForWindow(hwnd);
+        Win32.SetWindowPos(Handle, Win32.HWND_TOPMOST, b.X, b.Y, b.Width, b.Height, Win32.SWP_SHOWWINDOW);
+        uint dpi = Win32.GetDpiForWindow(Handle);
         if (dpi > 0) _scale = dpi / 96.0;
-        Layout();
-    }
-
-    private void Layout()
-    {
         double w = ScreenWidthDip, h = ScreenHeightDip;
         _root.Width = w;
         _root.Height = h;
         _screen.Width = w;
         _screen.Height = h;
-        _full.Rect = new Rect(0, 0, w, h);
     }
 
     private void OnLoaded()
     {
         PlaceOnMonitor();
-        var hwnd = new WindowInteropHelper(this).Handle;
-        Win32.ForceForeground(hwnd);
+        Win32.ForceForeground(Handle);
         Activate();
         Focus();
         Keyboard.Focus(this);
-        _dim.Opacity = 0;
-        Ui.Fade(_dim, 1, 180);
+        _probe = new ElementProbe(Handle, (point, rect) => Dispatcher.BeginInvoke(() => OnProbed(point, rect)));
         var cursor = ToDip(Shot.Cursor);
+        MovePointer(cursor);
+        Ripple(cursor);
+        PlaceHint(cursor, animate: true);
         UpdateHover(cursor);
-        PlaceHint(cursor);
+        var hideHint = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4.5) };
+        hideHint.Tick += (_, _) =>
+        {
+            hideHint.Stop();
+            _hintFollows = false;
+            Ui.Fade(_hint, 0, 450);
+        };
+        hideHint.Start();
         _idle.Start();
     }
 
@@ -145,54 +153,226 @@ internal sealed class OverlayWindow : Window
 
     private Rect ToDip(Int32Rect r) => new(r.X / _scale, r.Y / _scale, r.Width / _scale, r.Height / _scale);
 
+    // ---- the star pointer ----
+
+    private static readonly Geometry Star = Geometry.Parse(
+        "M 0,-11 C 1.2,-2.4 2.4,-1.2 11,0 C 2.4,1.2 1.2,2.4 0,11 C -1.2,2.4 -2.4,1.2 -11,0 C -2.4,-1.2 -1.2,-2.4 0,-11 Z");
+
+    private static Path StarShape(double size, double opacity)
+    {
+        var star = new Path
+        {
+            Data = Star,
+            Fill = Brushes.White,
+            Stretch = Stretch.Uniform,
+            Width = size,
+            Height = size,
+            Opacity = opacity,
+            IsHitTestVisible = false,
+        };
+        return star;
+    }
+
+    private Canvas BuildPointer()
+    {
+        var canvas = new Canvas { IsHitTestVisible = false, Effect = Theme.Glow(Theme.PointerGlow, 16, 1) };
+        var main = StarShape(24, 1);
+        Canvas.SetLeft(main, -12);
+        Canvas.SetTop(main, -12);
+        var small = StarShape(10, 0.9);
+        Canvas.SetLeft(small, 9);
+        Canvas.SetTop(small, -17);
+        canvas.Children.Add(main);
+        canvas.Children.Add(small);
+        // A gentle twinkle.
+        var twinkle = new DoubleAnimation(0.45, 1, TimeSpan.FromMilliseconds(700))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+        };
+        small.BeginAnimation(OpacityProperty, twinkle);
+        return canvas;
+    }
+
+    private void MovePointer(Point point)
+    {
+        Canvas.SetLeft(_pointer, point.X);
+        Canvas.SetTop(_pointer, point.Y);
+        if (_hintFollows && _hint.Opacity > 0) PlaceHint(point, animate: false);
+        // Leave a short trail of sparkles when moving quickly.
+        if ((point - _lastTrail).Length > 26)
+        {
+            _lastTrail = point;
+            SpawnSparkle(point);
+        }
+    }
+
+    private void SpawnSparkle(Point point)
+    {
+        if (_trail.Count > 14) return;
+        var size = 5 + Random.Shared.NextDouble() * 6;
+        var sparkle = StarShape(size, 0.9);
+        sparkle.Effect = Theme.Glow(Theme.PointerGlow, 8, 1);
+        Canvas.SetLeft(sparkle, point.X - size / 2 + Random.Shared.Next(-8, 9));
+        Canvas.SetTop(sparkle, point.Y - size / 2 + Random.Shared.Next(-8, 9));
+        _root.Children.Insert(_root.Children.IndexOf(_pointer), sparkle);
+        _trail.Add(sparkle);
+        Ui.Fade(sparkle, 0, 520, () =>
+        {
+            _root.Children.Remove(sparkle);
+            _trail.Remove(sparkle);
+        });
+    }
+
+    private void SetPointerVisible(bool visible)
+    {
+        _pointer.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        Cursor = visible ? Cursors.None : Cursors.Arrow;
+    }
+
+    // ---- ripple ----
+
+    /// <summary>A ring of light spreads across the screen from the pointer, and the picture breathes with it.</summary>
+    private void Ripple(Point center)
+    {
+        double reach = Math.Sqrt(ScreenWidthDip * ScreenWidthDip + ScreenHeightDip * ScreenHeightDip);
+        var rings = new[]
+        {
+            new Ellipse
+            {
+                Stroke = Theme.PointerStroke,
+                StrokeThickness = 3,
+                Effect = Theme.Glow(Theme.PointerGlow, 30, 1),
+                IsHitTestVisible = false,
+            },
+            new Ellipse
+            {
+                Stroke = Theme.B("#669FD0FF"),
+                StrokeThickness = 14,
+                Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 18 },
+                IsHitTestVisible = false,
+            },
+        };
+        var flash = new Ellipse
+        {
+            Fill = new RadialGradientBrush(Theme.C("#88CFE6FF"), Theme.C("#00CFE6FF")),
+            Width = 260,
+            Height = 260,
+            IsHitTestVisible = false,
+        };
+        Canvas.SetLeft(flash, center.X - 130);
+        Canvas.SetTop(flash, center.Y - 130);
+        int insertAt = _root.Children.IndexOf(_frame);
+        _root.Children.Insert(insertAt, flash);
+        foreach (var ring in rings) _root.Children.Insert(insertAt, ring);
+        Ui.Fade(flash, 0, 600, () => _root.Children.Remove(flash));
+
+        _screenPulse.CenterX = center.X;
+        _screenPulse.CenterY = center.Y;
+        var pulse = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(700) };
+        pulse.KeyFrames.Add(new EasingDoubleKeyFrame(1.012, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(180)),
+            new SineEase { EasingMode = EasingMode.EaseOut }));
+        pulse.KeyFrames.Add(new EasingDoubleKeyFrame(0.997, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)),
+            new SineEase { EasingMode = EasingMode.EaseInOut }));
+        pulse.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(700)),
+            new SineEase { EasingMode = EasingMode.EaseInOut }));
+        _screenPulse.BeginAnimation(ScaleTransform.ScaleXProperty, pulse);
+        _screenPulse.BeginAnimation(ScaleTransform.ScaleYProperty, pulse);
+
+        var started = DateTime.UtcNow;
+        const double duration = 950;
+        EventHandler? frame = null;
+        frame = (_, _) =>
+        {
+            double t = Math.Min(1, (DateTime.UtcNow - started).TotalMilliseconds / duration);
+            double eased = 1 - Math.Pow(1 - t, 3);
+            for (int i = 0; i < rings.Length; i++)
+            {
+                double radius = 10 + reach * eased * (i == 0 ? 1 : 0.92);
+                rings[i].Width = rings[i].Height = radius * 2;
+                Canvas.SetLeft(rings[i], center.X - radius);
+                Canvas.SetTop(rings[i], center.Y - radius);
+                rings[i].Opacity = (1 - t) * (i == 0 ? 0.95 : 0.6);
+            }
+            if (t >= 1)
+            {
+                CompositionTarget.Rendering -= frame;
+                foreach (var ring in rings) _root.Children.Remove(ring);
+            }
+        };
+        CompositionTarget.Rendering += frame;
+    }
+
     // ---- hint ----
 
     private Border BuildHint()
     {
         var text = new StackPanel { Orientation = Orientation.Horizontal };
-        text.Children.Add(Ui.Sparkle(13));
-        var label = Ui.Label(Loc.T(_settings.TypeToAsk ? "hint_typing" : "hint"), 12.5);
+        var spark = Ui.Label("✦", 13, Brushes.White);
+        text.Children.Add(spark);
+        var label = Ui.Label(Loc.T(_settings.TypeToAsk ? "hint_typing" : "hint"), 12.5, Brushes.White);
         label.TextWrapping = TextWrapping.NoWrap;
         label.Margin = new Thickness(8, 0, 0, 1);
         text.Children.Add(label);
         return new Border
         {
-            Background = Theme.B("#E0141825"),
-            BorderBrush = Theme.GlassStroke,
+            Background = Theme.B("#B8162030"),
+            BorderBrush = Theme.B("#88CFE6FF"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(16),
             Padding = new Thickness(12, 7, 14, 8),
             Child = text,
             IsHitTestVisible = false,
-            Effect = Theme.Shadow(),
+            Effect = Theme.Glow(Theme.PointerGlow, 20, 0.7),
         };
     }
 
-    private void PlaceHint(Point cursor)
+    private void PlaceHint(Point cursor, bool animate)
     {
-        _hint.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        if (animate) _hint.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var size = _hint.DesiredSize;
-        double x = Math.Clamp(cursor.X + 22, 12, ScreenWidthDip - size.Width - 12);
-        double y = Math.Clamp(cursor.Y + 26, 12, ScreenHeightDip - size.Height - 12);
+        double x = Math.Clamp(cursor.X + 26, 12, Math.Max(12, ScreenWidthDip - size.Width - 12));
+        double y = Math.Clamp(cursor.Y + 14, 12, Math.Max(12, ScreenHeightDip - size.Height - 12));
         Canvas.SetLeft(_hint, x);
         Canvas.SetTop(_hint, y);
-        Ui.PopIn(_hint);
-        var hide = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
-        hide.Tick += (_, _) =>
-        {
-            hide.Stop();
-            Ui.Fade(_hint, 0, 400);
-        };
-        hide.Start();
+        if (animate) Ui.PopIn(_hint, 0.9);
     }
 
-    // ---- pointing and dragging ----
+    // ---- outlining ----
 
     private void UpdateHover(Point point)
     {
+        // Keep the element outline while the pointer stays on it.
+        if (!_hover.IsEmpty && _hover.Contains(point) && _hoverIsElement) return;
         var px = new Point(point.X * _scale, point.Y * _scale);
         var window = Shot.Windows.FirstOrDefault(r => px.X >= r.X && px.Y >= r.Y && px.X < r.X + r.Width && px.Y < r.Y + r.Height);
         var rect = window.Width > 0 ? ToDip(window) : new Rect(0, 0, ScreenWidthDip, ScreenHeightDip);
+        _hoverIsElement = false;
+        SetHover(rect);
+        var screen = new Win32.POINT { X = (int)px.X + Shot.Bounds.X, Y = (int)px.Y + Shot.Bounds.Y };
+        _probe?.Request(screen);
+    }
+
+    private bool _hoverIsElement;
+
+    private void OnProbed(Win32.POINT point, Int32Rect? rect)
+    {
+        if (_mode is not (Mode.Pointing or Mode.Adding) || _dragging || rect == null) return;
+        var r = rect.Value;
+        var local = new Int32Rect(r.X - Shot.Bounds.X, r.Y - Shot.Bounds.Y, r.Width, r.Height);
+        var dip = ToDip(local);
+        dip.Intersect(new Rect(0, 0, ScreenWidthDip, ScreenHeightDip));
+        if (dip.IsEmpty) return;
+        var mouse = Mouse.GetPosition(_root);
+        if (!dip.Contains(mouse)) return;
+        _hoverIsElement = true;
+        var padded = dip;
+        padded.Inflate(4, 3);
+        SetHover(padded);
+    }
+
+    private void SetHover(Rect rect)
+    {
         if (rect == _hover) return;
         _hover = rect;
         ShowFrame(rect, animate: true);
@@ -202,21 +382,15 @@ internal sealed class OverlayWindow : Window
     {
         _frame.Visibility = Visibility.Visible;
         var inset = rect;
-        if (rect.Width >= ScreenWidthDip - 1 && rect.Height >= ScreenHeightDip - 1) inset.Inflate(-3, -3);
-        if (!animate)
-        {
-            SetFrame(inset);
-            return;
-        }
-        // Glide between windows.
+        if (rect.Width >= ScreenWidthDip - 1 && rect.Height >= ScreenHeightDip - 1) inset.Inflate(-4, -4);
         var from = new Rect(Canvas.GetLeft(_frame), Canvas.GetTop(_frame), _frame.Width, _frame.Height);
-        if (double.IsNaN(from.X) || double.IsNaN(from.Width) || from.Width <= 0)
+        _frameProxy?.BeginAnimation(RectProxy.ValueProperty, null);
+        if (!animate || double.IsNaN(from.X) || double.IsNaN(from.Width) || from.Width <= 0)
         {
             SetFrame(inset);
             return;
         }
-        _frameProxy?.BeginAnimation(RectProxy.ValueProperty, null);
-        var animation = new RectAnimation(from, inset, TimeSpan.FromMilliseconds(130))
+        var animation = new RectAnimation(from, inset, TimeSpan.FromMilliseconds(140))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
         };
@@ -225,16 +399,16 @@ internal sealed class OverlayWindow : Window
         _frameProxy = proxy;
     }
 
-    private RectProxy? _frameProxy;
-
     private void SetFrame(Rect rect)
     {
         Canvas.SetLeft(_frame, rect.X);
         Canvas.SetTop(_frame, rect.Y);
         _frame.Width = Math.Max(0, rect.Width);
         _frame.Height = Math.Max(0, rect.Height);
-        _hole.Rect = rect;
+        _frame.CornerRadius = new CornerRadius(Math.Min(12, Math.Min(rect.Width, rect.Height) / 3));
     }
+
+    // ---- mouse ----
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
@@ -242,13 +416,14 @@ internal sealed class OverlayWindow : Window
         _idle.Stop();
         _idle.Start();
         var point = e.GetPosition(_root);
+        if (_pointer.Visibility == Visibility.Visible) MovePointer(point);
         switch (_mode)
         {
             case Mode.Pointing:
             case Mode.Adding:
-                if (_mouseDown && (Math.Abs(point.X - _dragStart.X) > 5 || Math.Abs(point.Y - _dragStart.Y) > 5))
+                if (_mouseDown && !_dragging && (Math.Abs(point.X - _dragStart.X) > 5 || Math.Abs(point.Y - _dragStart.Y) > 5))
                 {
-                    _mode = _mode == Mode.Adding ? Mode.Adding : Mode.Dragging;
+                    if (_mode == Mode.Pointing) _mode = Mode.Dragging;
                     _dragging = true;
                     _frameProxy?.BeginAnimation(RectProxy.ValueProperty, null);
                 }
@@ -261,8 +436,6 @@ internal sealed class OverlayWindow : Window
         }
     }
 
-    private bool _dragging;
-
     private static Rect Normalize(Point a, Point b) =>
         new(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
 
@@ -274,6 +447,7 @@ internal sealed class OverlayWindow : Window
         _dragging = false;
         _dragStart = e.GetPosition(_root);
         CaptureMouse();
+        _hintFollows = false;
         Ui.Fade(_hint, 0, 120);
     }
 
@@ -284,15 +458,11 @@ internal sealed class OverlayWindow : Window
         _mouseDown = false;
         ReleaseMouseCapture();
         var point = e.GetPosition(_root);
-        Rect chosen;
+        Rect chosen = _hover;
         if (_dragging)
         {
-            chosen = Normalize(_dragStart, point);
-            if (chosen.Width < 8 || chosen.Height < 8) chosen = _hover;
-        }
-        else
-        {
-            chosen = _hover;
+            var dragged = Normalize(_dragStart, point);
+            if (dragged.Width >= 8 && dragged.Height >= 8) chosen = dragged;
         }
         _dragging = false;
         if (_mode == Mode.Dragging) _mode = Mode.Pointing;
@@ -319,7 +489,7 @@ internal sealed class OverlayWindow : Window
         var attachment = new Attachment { Name = Loc.T("selection"), Image = image };
         bool adding = _mode == Mode.Adding;
         _selection = rectDip;
-        SetFrame(rectDip);
+        ShowFrame(rectDip, animate: false);
         if (adding && _card != null)
         {
             _card.AddAttachment(attachment);
@@ -335,7 +505,8 @@ internal sealed class OverlayWindow : Window
     {
         _mode = Mode.Card;
         _idle.Stop();
-        Cursor = Cursors.Arrow;
+        SetPointerVisible(false);
+        _hintFollows = false;
         Ui.Fade(_hint, 0, 100);
         _card = new CardView(this, _settings);
         if (attachment != null) _card.AddAttachment(attachment);
@@ -386,9 +557,11 @@ internal sealed class OverlayWindow : Window
         if (_card == null) return;
         _mode = Mode.Adding;
         _card.Visibility = Visibility.Hidden;
-        Cursor = Cursors.Cross;
+        SetPointerVisible(true);
         _hover = Rect.Empty;
-        UpdateHover(Mouse.GetPosition(_root));
+        var point = Mouse.GetPosition(_root);
+        MovePointer(point);
+        UpdateHover(point);
     }
 
     private void BackToCard()
@@ -396,8 +569,8 @@ internal sealed class OverlayWindow : Window
         if (_card == null) return;
         _mode = Mode.Card;
         _card.Visibility = Visibility.Visible;
-        Cursor = Cursors.Arrow;
-        SetFrame(_selection);
+        SetPointerVisible(false);
+        ShowFrame(_selection, animate: true);
         PositionCard(_selection);
         _card.FocusPrompt();
     }
@@ -409,7 +582,6 @@ internal sealed class OverlayWindow : Window
         var anchor = new Rect(point.X, point.Y, 1, 1);
         _selection = anchor;
         _frame.Visibility = Visibility.Collapsed;
-        _hole.Rect = Rect.Empty;
         OpenCard(anchor, null, null);
         if (_card != null) _ = _card.ImportFilesAsync(files);
     }
@@ -434,7 +606,6 @@ internal sealed class OverlayWindow : Window
         // Typing without a selection: ask about nothing in particular, at the pointer.
         var cursor = Mouse.GetPosition(_root);
         _frame.Visibility = Visibility.Collapsed;
-        _hole.Rect = Rect.Empty;
         _selection = new Rect(cursor.X, cursor.Y, 1, 1);
         OpenCard(_selection, null, e.Text);
     }
@@ -468,6 +639,7 @@ internal sealed class OverlayWindow : Window
         if (_closing) return;
         _closing = true;
         _idle.Stop();
+        _probe?.Dispose();
         _card?.CancelAll();
         Ui.Fade(_root, 0, 120, Close);
     }
@@ -483,6 +655,7 @@ internal sealed class OverlayWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _probe?.Dispose();
         _card?.CancelAll();
         _app.OverlayClosed(this);
     }

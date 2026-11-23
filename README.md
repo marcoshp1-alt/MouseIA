@@ -8,8 +8,8 @@ Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e 
 
 ## Como usar
 
-1. **Balance o mouse** de um lado para o outro, ou aperte **Alt+Shift+M**.
-2. **Clique numa janela** para selecioná-la inteira, ou **arraste** para escolher uma área.
+1. **Balance o mouse** de um lado para o outro, ou aperte **Alt+Shift+M**. Uma onda de luz sai do cursor e ele vira uma estrela brilhante.
+2. **Passe o mouse** sobre um parágrafo, botão, imagem ou janela: ele se ilumina. **Clique** para escolher, ou **arraste** para pegar uma área.
 3. No cartão que aparece, **pergunte o que quiser** ou use os botões:
 
 | Botão | O que faz |
@@ -17,13 +17,14 @@ Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e 
 | 🌐 **Traduzir → idioma** | Traduz o texto da seleção para mais de 110 idiomas |
 | 📋 **Copiar texto** | Reconhece o texto da imagem (offline, OCR do Windows) e copia |
 | ▦ **QR Code** | Lê QR Codes e códigos de barras; abre links e mostra senhas de Wi-Fi |
-| 🎙 **Tradutor de voz** | Você fala num idioma e o MouseIA responde falando em outro |
+| 🔊 **Ouvir tradução** | Traduz a seleção e lê em voz alta no idioma escolhido |
 | 📁 **Arquivo** | Imagens, PDF, vídeos, Word, PowerPoint, Excel e textos (ou arraste para o cartão) |
 
 Mais coisas:
 - **Digite direto:** com o MouseIA aberto, comece a digitar para perguntar sem selecionar nada.
 - **Várias seleções:** o botão **+** junta outra área da tela na mesma pergunta.
 - **Ditado:** o 🎤 no campo de texto transforma sua fala em pergunta.
+- **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral).
 - Respostas com **Copiar**, **Ouvir** e **Tentar de novo**.
 - **Esc** ou **clique com o botão direito** fecha.
 
@@ -34,15 +35,11 @@ Em **Configurações > Inteligência artificial**:
 - **Gemini**: chave grátis em [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 - **ChatGPT**: chave da [OpenAI](https://platform.openai.com/api-keys)
 - **Claude**: chave da [Anthropic](https://platform.claude.com/settings/keys)
-- **IA local**: Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan… Roda no seu PC e nada sai da sua rede.
-  O botão **Detectar** encontra o servidor e lista os modelos sozinho.
-
-Para a IA local com o Ollama:
-```
-ollama pull gemma4:e4b
-```
-Depois clique em **Detectar** e escolha o modelo. Para perguntar sobre imagens, use um modelo com visão
-(gemma4, gemma3, qwen2.5vl, llava…).
+- **IA local**: roda no seu PC e nada sai da sua rede. Dois jeitos:
+  - **Arquivo de modelo**: escolha um `.gguf` (ou `.litertlm`) baixado do Hugging Face e pronto.
+    O MouseIA baixa o motor **llama.cpp** sozinho no primeiro uso e usa a placa de vídeo (ou o processador).
+    Para perguntar sobre imagens, baixe também o arquivo **mmproj** do mesmo modelo na mesma pasta.
+  - **Servidor**: Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan… O botão **Detectar** encontra e lista os modelos.
 
 As chaves ficam guardadas **criptografadas** (DPAPI) no seu usuário do Windows.
 Copiar texto e ler QR Code funcionam **sem IA e sem internet**.

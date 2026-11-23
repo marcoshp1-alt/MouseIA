@@ -38,6 +38,13 @@ public sealed class AppSettings
     public string Quality { get; set; } = "fast"; // fast | balanced | smart
     public string LocalUrl { get; set; } = "http://127.0.0.1:11434/v1";
     public string LocalModel { get; set; } = "";
+    /// <summary>"file": MouseIA runs a model file itself; "server": an external server (Ollama, LM Studio…).</summary>
+    public string LocalMode { get; set; } = "file";
+    /// <summary>A .gguf or .litertlm file, usually downloaded from Hugging Face.</summary>
+    public string LocalModelFile { get; set; } = "";
+    /// <summary>Optional vision projector (mmproj-*.gguf) for .gguf models.</summary>
+    public string LocalMmproj { get; set; } = "";
+    public string LocalBackend { get; set; } = "auto"; // auto (GPU, falls back to CPU) | cpu
 
     // Stored (encrypted) forms of the keys.
     public string GeminiKeyStored { get; set; } = "";
@@ -62,6 +69,11 @@ public sealed class AppSettings
     public bool AutoQr { get; set; } = true;
     public bool AutoOcr { get; set; } = true;
 
+    // Look
+    public bool GlassEffect { get; set; } = true;
+    /// <summary>How solid the glass is: 0.3 (very see-through) .. 1.0 (opaque).</summary>
+    public double GlassOpacity { get; set; } = 0.85;
+
     // General
     public string UiLanguage { get; set; } = "auto"; // auto | pt | en
     public bool StartWithWindows { get; set; } = true;
@@ -72,8 +84,11 @@ public sealed class AppSettings
 
     /// <summary>True when an AI is configured for the chosen provider.</summary>
     [JsonIgnore]
+    public bool UsesModelFile => Provider == ProviderIds.Local && LocalMode == "file";
+
+    [JsonIgnore]
     public bool HasAi => Provider == ProviderIds.Local
-        ? !string.IsNullOrWhiteSpace(LocalUrl)
+        ? (LocalMode == "file" ? !string.IsNullOrWhiteSpace(LocalModelFile) : !string.IsNullOrWhiteSpace(LocalUrl))
         : HasCloudKey;
 
     public string KeyFor(string provider) => provider switch
@@ -146,6 +161,11 @@ public sealed class AppSettings
             Provider = ProviderIds.Gemini;
         if (Quality is not ("fast" or "balanced" or "smart")) Quality = "fast";
         ShakeSensitivity = Math.Clamp(ShakeSensitivity, 1, 10);
+        GlassOpacity = Math.Clamp(GlassOpacity, 0.3, 1.0);
+        if (LocalMode is not ("file" or "server")) LocalMode = "file";
+        if (LocalBackend is not ("auto" or "cpu")) LocalBackend = "auto";
+        LocalModelFile = (LocalModelFile ?? "").Trim();
+        LocalMmproj = (LocalMmproj ?? "").Trim();
         VoiceRate = Math.Clamp(VoiceRate, 0.5, 2.0);
         LocalUrl = (LocalUrl ?? "").Trim();
         LocalModel = (LocalModel ?? "").Trim();

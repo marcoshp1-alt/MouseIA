@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace MouseIA.Core;
@@ -33,19 +36,47 @@ public static class Prompts
         return sb.ToString();
     }
 
-    public static string TranslateSystem(LanguageInfo target) =>
-        $"You are a professional translator. Translate into {target.English}. " +
-        "Output only the translation: no notes, no quotes, no explanations. " +
-        "Keep the original line breaks, lists and formatting. Keep names, code and URLs unchanged. " +
-        $"If the text is already in {target.English}, return it unchanged. " +
-        $"If there is no text to translate, reply with one short sentence in {target.English} saying no text was found.";
+    private static string Name(LanguageInfo l) =>
+        l.Native == l.English ? l.English : $"{l.English} ({l.Native})";
 
-    public static string TranslateRequest(LanguageInfo target, string? text, bool hasImage)
+    public static string TranslateSystem(LanguageInfo target) =>
+        $"You are a translation engine. Your only job is to rewrite the user's text in {Name(target)}. " +
+        $"Always answer in {target.English}, never in the source language, and never repeat the original text. " +
+        "Output only the translation: no notes, no quotes, no labels, no explanations. " +
+        "Keep line breaks and lists. Keep brand names, product names, code and URLs as they are.";
+
+    public static string TranslateRequest(LanguageInfo target, string? text, bool hasImage, bool insist = false)
     {
+        var sb = new StringBuilder();
+        if (insist)
+            sb.Append($"Your previous reply was not translated. This time write it in {target.English} only.\n\n");
         if (!string.IsNullOrWhiteSpace(text))
-            return $"Translate this into {target.English}:\n\n{Trim(text!, 20000)}" +
-                   (hasImage ? "\n\n(Use the attached image to fix any recognition errors.)" : "");
-        return $"Translate all the text visible in the attached image into {target.English}.";
+        {
+            sb.Append($"Translate the text between the markers into {Name(target)}.\n<<<\n{Trim(text!, 20000)}\n>>>\n");
+            if (hasImage) sb.Append("The attached image shows the same text; use it to fix recognition errors.\n");
+        }
+        else
+        {
+            sb.Append($"Translate all the text visible in the attached image into {Name(target)}.\n");
+            sb.Append($"If the image has no text, say so in one short sentence in {target.English}.\n");
+        }
+        sb.Append($"Reply with the {target.English} translation only.");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// True when a "translation" is basically the source text again (the model echoed it).
+    /// Compares the sets of words; short texts are not judged.
+    /// </summary>
+    public static bool LooksUntranslated(string source, string result)
+    {
+        static HashSet<string> Words(string s) => new(
+            System.Text.RegularExpressions.Regex.Matches(s.ToLowerInvariant(), @"\p{L}{3,}").Select(m => m.Value));
+        var a = Words(source);
+        var b = Words(result);
+        if (a.Count < 6 || b.Count == 0) return false;
+        int shared = a.Count(b.Contains);
+        return shared >= 0.7 * Math.Min(a.Count, b.Count);
     }
 
     private static string Trim(string text, int max) => text.Length <= max ? text : text[..max] + "…";

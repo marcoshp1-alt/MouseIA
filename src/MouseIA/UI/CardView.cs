@@ -61,7 +61,6 @@ internal sealed class CardView : Grid
     private readonly Clickable _send;
     private readonly TextBlock _sendIcon;
     private readonly WrapPanel _chips;
-    private VoicePanel? _voicePanel;
 
     private CancellationTokenSource? _cts;
     private bool _busy;
@@ -85,7 +84,7 @@ internal sealed class CardView : Grid
         {
             CornerRadius = new CornerRadius(24),
             Background = Theme.B("#01000000"),
-            Effect = Theme.Glow(Theme.AccentA, 46, 0.32),
+            Effect = Theme.Glow(Theme.PointerGlow, 46, 0.38),
         };
         _backdrop = new Image
         {
@@ -101,7 +100,18 @@ internal sealed class CardView : Grid
         backdropHost.Children.Add(_backdrop);
         _glass = new Grid { Clip = _clip, ClipToBounds = true };
         _glass.Children.Add(backdropHost);
-        _glass.Children.Add(new Border { Background = Theme.GlassTint });
+        var tint = new Border { Background = Theme.GlassTint };
+        _glass.Children.Add(tint);
+        if (settings.GlassEffect)
+        {
+            // Lower opacity lets more of the blurred screen show through.
+            tint.Opacity = settings.GlassOpacity;
+        }
+        else
+        {
+            backdropHost.Visibility = Visibility.Collapsed;
+            tint.Background = Theme.SolidSurface;
+        }
         _glass.Children.Add(new Border { Background = Theme.GlassSheen });
         var stroke = new Border
         {
@@ -159,8 +169,8 @@ internal sealed class CardView : Grid
         _copyText.Click += () => _ = CopyTextAsync();
         _qr = new PillButton(Theme.Glyph.Qr, Loc.T("qr_code"), Loc.T("qr_tip"));
         _qr.Click += () => _ = ReadCodesAsync(showEmpty: true);
-        _voice = new PillButton(Theme.Glyph.Mic, Loc.T("voice_translator"), Loc.T("voice_tip"));
-        _voice.Click += ToggleVoicePanel;
+        _voice = new PillButton(Theme.Glyph.Volume, Loc.T("listen_translation"), Loc.T("listen_translation_tip"));
+        _voice.Click += () => _ = TranslateAsync(speak: true);
         _file = new PillButton(Theme.Glyph.Folder, Loc.T("open_file"), Loc.T("open_file_tip"));
         _file.Click += () => _ = OpenFilesAsync();
         _tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -293,7 +303,7 @@ internal sealed class CardView : Grid
 
     public bool IsBusy => _busy;
 
-    public bool HasPopupOpen => _language.IsOpen || (_voicePanel?.HasPopupOpen ?? false);
+    public bool HasPopupOpen => _language.IsOpen;
 
     public void FocusPrompt(string? initialText = null)
     {
@@ -438,7 +448,7 @@ internal sealed class CardView : Grid
     private void ResetChips()
     {
         _chips.Children.Clear();
-        if (_history.Count > 0 || _voicePanel != null)
+        if (_history.Count > 0)
         {
             _chips.Visibility = Visibility.Collapsed;
             return;
@@ -538,7 +548,6 @@ internal sealed class CardView : Grid
     public void CancelAll()
     {
         _cts?.Cancel();
-        _voicePanel?.Cancel();
         SpeechService.Stop();
     }
 
@@ -554,18 +563,19 @@ internal sealed class CardView : Grid
             ShowNeedsAiBanner();
             return;
         }
-        CloseVoicePanel();
         var ocr = await AllOcrTextAsync(4000);
         var images = _attachments.Where(a => a.Image != null).Select(a => a.Image!).ToList();
         _historySystem = Prompts.Assistant(UserLanguage, ocr, AllFileText(), images.Count > 0);
         _history.Add(new ChatTurn(true, prompt));
         AddUserBubble(display);
         var answer = AddAnswer(UserLanguage.Code);
-        await RunAsync(answer, _historySystem, _history.ToList(), images, onDone: text => _history.Add(new ChatTurn(false, text)),
-            onFail: () => _history.RemoveAt(_history.Count - 1));
+        var text = await RunAsync(answer, _historySystem, _history.ToList(), images);
+        if (text != null) _history.Add(new ChatTurn(false, text));
+        else _history.RemoveAt(_history.Count - 1);
     }
 
-    private async Task TranslateAsync()
+    /// <summary>Translates the selection (or the last answer); with speak, also reads the translation aloud.</summary>
+    private async Task TranslateAsync(bool speak = false)
     {
         if (_busy) return;
         var target = Languages.Find(_language.Selected) ?? UserLanguage;
@@ -584,32 +594,45 @@ internal sealed class CardView : Grid
                 ShowNeedsAiBanner();
                 return;
             }
+            if (speak)
+            {
+                // Without an AI there's no translation, but the text can still be read aloud.
+                _ = SpeakAsync(source, DetectSpeechLanguage(source), null);
+                ShowNeedsAiBanner();
+                return;
+            }
             OpenGoogleTranslate(source, target.Code);
             return;
         }
 
-        CloseVoicePanel();
-        var display = Loc.Format("translate_to_x", target.Display(Loc.IsPortuguese).Split(" · ")[0]);
-        AddUserBubble("🌐 " + display);
+        var name = target.Display(Loc.IsPortuguese).Split(" · ")[0];
+        var display = Loc.Format(speak ? "listen_translation_x" : "translate_to_x", name);
+        AddUserBubble((speak ? "🔊 " : "🌐 ") + display);
         var answer = AddAnswer(target.Code);
-        var request = Prompts.TranslateRequest(target, source, useImages);
         var images = useImages ? _attachments.Where(a => a.Image != null).Select(a => a.Image!).ToList() : new List<BitmapSource>();
-        await RunAsync(answer, Prompts.TranslateSystem(target), new[] { new ChatTurn(true, request) }, images,
-            onDone: text =>
-            {
-                // Follow-up questions can refer to the translation.
-                if (_historySystem.Length == 0)
-                    _historySystem = Prompts.Assistant(UserLanguage, ocr, fileText, _attachments.Any(a => a.Image != null));
-                _history.Add(new ChatTurn(true, display));
-                _history.Add(new ChatTurn(false, text));
-                if (_settings.SpeakTranslation) _ = SpeakAsync(MiniMarkdown.ToPlain(text), target.Code, answer);
-            },
-            onFail: () => { });
+        var system = Prompts.TranslateSystem(target);
+        var text = await RunAsync(answer, system, new[] { new ChatTurn(true, Prompts.TranslateRequest(target, source, useImages)) }, images);
+        if (text != null && source.Length > 0 && Prompts.LooksUntranslated(source, text))
+        {
+            // The model repeated the original: ask once more, firmly and with text only.
+            Native.Log.Write("Translation echoed the source; retrying.");
+            answer.Reset();
+            text = await RunAsync(answer, system,
+                new[] { new ChatTurn(true, Prompts.TranslateRequest(target, source, hasImage: false, insist: true)) },
+                new List<BitmapSource>());
+        }
+        if (text == null) return;
+        // Follow-up questions can refer to the translation.
+        if (_historySystem.Length == 0)
+            _historySystem = Prompts.Assistant(UserLanguage, ocr, fileText, _attachments.Any(a => a.Image != null));
+        _history.Add(new ChatTurn(true, display));
+        _history.Add(new ChatTurn(false, text));
+        if (speak || _settings.SpeakTranslation) await SpeakAsync(MiniMarkdown.ToPlain(text), target.Code, answer);
         UpdateAttachmentsUi();
     }
 
-    private async Task RunAsync(AnswerView answer, string system, IReadOnlyList<ChatTurn> turns, List<BitmapSource> images,
-        Action<string> onDone, Action onFail)
+    /// <summary>Streams one answer into the view. Returns the text, or null when nothing usable came back.</summary>
+    private async Task<string?> RunAsync(AnswerView answer, string system, IReadOnlyList<ChatTurn> turns, List<BitmapSource> images)
     {
         _busy = true;
         UpdateSendState();
@@ -619,42 +642,44 @@ internal sealed class CardView : Grid
         try
         {
             var encoded = await Task.Run(() => images.Select(i => ImageUtil.ToJpegBase64(i, 1536)).ToList(), ct);
-            var request = new AiRequest
-            {
-                Provider = provider,
-                ApiKey = _settings.KeyFor(provider),
-                BaseUrl = _settings.LocalUrl,
-                Models = ModelCatalog.ModelsFor(_settings),
-                SystemPrompt = system,
-                History = turns,
-                ImagesJpegBase64 = encoded,
-            };
             var dispatcher = Dispatcher;
-            var result = await Task.Run(() => AiClient.StreamAsync(request,
+            var progress = new Progress<string>(status => answer.SetStatus(status));
+            var prepared = await Task.Run(() => AiSetup.PrepareAsync(_settings, system, turns, encoded, 4096, progress, ct), ct);
+            answer.SetStatus(null);
+            var result = await Task.Run(() => AiClient.StreamAsync(prepared.Request,
                 piece => dispatcher.BeginInvoke(DispatcherPriority.Background, () => answer.Append(piece)), ct), ct);
             await dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background); // let queued pieces land
-            answer.Complete(result.Truncated ? Loc.T("answer_truncated") :
-                result.UsedFallback ? Loc.Format("used_fallback", result.Model) : null);
-            onDone(result.Text);
+            string? note = result.Truncated ? Loc.T("answer_truncated")
+                : prepared.DroppedImages ? Loc.T("no_vision_note")
+                : result.UsedFallback ? Loc.Format("used_fallback", result.Model) : null;
+            answer.Complete(note);
+            return result.Text;
         }
         catch (OperationCanceledException)
         {
             answer.Complete(Loc.T("stopped"));
-            if (answer.Text.Length > 0) onDone(answer.Text); else onFail();
+            return answer.Text.Length > 0 ? answer.Text : null;
+        }
+        catch (LocalEngineException ex)
+        {
+            Native.Log.Write("Local engine: " + ex.Message);
+            answer.Fail(ex.Message);
+            ShowBanner(Theme.Glyph.Pc, Loc.T("check_local"), (Loc.T("open_settings"), () => _host.OpenSettingsAndClose()));
+            return null;
         }
         catch (AiException ex)
         {
             Native.Log.Write($"AI error {ex.Kind}: {ex.Detail}");
             answer.Fail(ErrorText(ex, provider));
-            onFail();
             if (ex.Kind is AiErrorKind.InvalidKey or AiErrorKind.Forbidden or AiErrorKind.NoCredit)
                 ShowBanner(Theme.Glyph.Warning, Loc.T("check_settings"), (Loc.T("open_settings"), () => _host.OpenSettingsAndClose()));
+            return null;
         }
         catch (Exception ex)
         {
             Native.Log.Write("Unexpected: " + ex);
             answer.Fail(ex.Message);
-            onFail();
+            return null;
         }
         finally
         {
@@ -913,59 +938,6 @@ internal sealed class CardView : Grid
 
     // ---- voice ----
 
-    private void ToggleVoicePanel()
-    {
-        if (_voicePanel != null)
-        {
-            CloseVoicePanel();
-            return;
-        }
-        _voicePanel = new VoicePanel(_settings, this);
-        _voice.SetActive(true);
-        _chips.Visibility = Visibility.Collapsed;
-        _scroll.Visibility = Visibility.Visible;
-        _messages.Children.Add(_voicePanel);
-        Ui.PopIn(_voicePanel);
-        _scroll.ScrollToEnd();
-    }
-
-    private void CloseVoicePanel()
-    {
-        if (_voicePanel == null) return;
-        _voicePanel.Cancel();
-        _messages.Children.Remove(_voicePanel);
-        _voicePanel = null;
-        _voice.SetActive(false);
-        if (_messages.Children.Count == 0) _scroll.Visibility = Visibility.Collapsed;
-        ResetChips();
-    }
-
-    internal bool HasAi => _settings.HasAi;
-
-    internal async Task<string?> TranslateTextAsync(string text, LanguageInfo target, CancellationToken ct)
-    {
-        var provider = _settings.Provider;
-        var request = new AiRequest
-        {
-            Provider = provider,
-            ApiKey = _settings.KeyFor(provider),
-            BaseUrl = _settings.LocalUrl,
-            Models = ModelCatalog.ModelsFor(_settings),
-            SystemPrompt = Prompts.TranslateSystem(target),
-            History = new[] { new ChatTurn(true, Prompts.TranslateRequest(target, text, false)) },
-            MaxOutputTokens = 2048,
-        };
-        try
-        {
-            var result = await Task.Run(() => AiClient.StreamAsync(request, _ => { }, ct), ct);
-            return result.Text.Trim();
-        }
-        catch (AiException ex)
-        {
-            throw new InvalidOperationException(ErrorText(ex, provider), ex);
-        }
-    }
-
     private async Task DictateIntoPromptAsync()
     {
         var language = _settings.VoiceInputLanguage == "auto" ? SpeechService.SystemLanguageTag() : _settings.VoiceInputLanguage;
@@ -1104,6 +1076,7 @@ internal sealed class AnswerView : StackPanel
     private readonly FrameworkElement _typing;
     private readonly DispatcherTimer _render;
     private readonly IconButton _speak;
+    private readonly TextBlock _status;
     private bool _dirty;
 
     public string Text => _text.ToString();
@@ -1116,6 +1089,10 @@ internal sealed class AnswerView : StackPanel
         _typing = TypingDots();
         _typing.Margin = new Thickness(10, 0, 0, 0);
         head.Children.Add(_typing);
+        _status = Ui.Label("", 12, Theme.Muted);
+        _status.Margin = new Thickness(10, 0, 0, 0);
+        _status.TextWrapping = TextWrapping.NoWrap;
+        head.Children.Add(_status);
         Children.Add(head);
 
         _body = new RichTextBox
@@ -1191,6 +1168,7 @@ internal sealed class AnswerView : StackPanel
         _dirty = true;
         Flush();
         _typing.Visibility = Visibility.Collapsed;
+        _status.Text = "";
         if (_text.Length > 0)
         {
             _body.Visibility = Visibility.Visible;
@@ -1208,6 +1186,7 @@ internal sealed class AnswerView : StackPanel
         _render.Stop();
         Flush();
         _typing.Visibility = Visibility.Collapsed;
+        _status.Text = "";
         _note.Text = message;
         _note.Foreground = Theme.Danger;
         _note.Visibility = Visibility.Visible;
@@ -1215,6 +1194,23 @@ internal sealed class AnswerView : StackPanel
     }
 
     public void MarkSpeaking() => _speak.Glyph = Theme.Glyph.Stop;
+
+    /// <summary>Shows what's happening before text arrives (e.g. the local model loading).</summary>
+    public void SetStatus(string? status) => _status.Text = status ?? "";
+
+    /// <summary>Clears the answer so it can stream again (used when a translation is retried).</summary>
+    public void Reset()
+    {
+        _text.Clear();
+        _dirty = true;
+        Flush();
+        _body.Visibility = Visibility.Collapsed;
+        _actions.Visibility = Visibility.Collapsed;
+        _note.Visibility = Visibility.Collapsed;
+        _note.Foreground = Theme.Faint;
+        _typing.Visibility = Visibility.Visible;
+        _render.Start();
+    }
 
     private static FrameworkElement TypingDots()
     {

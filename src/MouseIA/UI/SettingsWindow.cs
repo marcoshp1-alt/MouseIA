@@ -20,22 +20,24 @@ namespace MouseIA.UI;
 internal sealed class SettingsWindow : Window
 {
     private readonly AppController _app;
-    private readonly AppSettings _draft;
+    private AppSettings _draft;
     private readonly Border _surface;
-    private readonly ContentControl _page = new();
-    private readonly StackPanel _nav = new();
-    private readonly TextBlock _savedNote;
-    private readonly Dictionary<string, Func<FrameworkElement>> _pages;
+    private ContentControl _page = new();
+    private StackPanel _nav = new();
+    private readonly System.Windows.Threading.DispatcherTimer _saveTimer;
+    private TextBlock _savedNote = new();
+    private IconButton? _maximize;
+    private Dictionary<string, Func<FrameworkElement>> _pages = new();
     private readonly Dictionary<string, Clickable> _navButtons = new();
     private string _current = "ai";
+    private bool _acrylic;
 
     public SettingsWindow(AppController app, string? startPage = null)
     {
         _app = app;
         _draft = app.Settings.Clone();
-        Title = Loc.T("settings_title");
-        Width = 860;
-        Height = 620;
+        Width = 900;
+        Height = 640;
         MinWidth = 720;
         MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -55,6 +57,47 @@ internal sealed class SettingsWindow : Window
             UseAeroCaptionButtons = false,
         });
 
+        // Changes apply on their own, a moment after the last edit.
+        _saveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _saveTimer.Tick += (_, _) =>
+        {
+            _saveTimer.Stop();
+            Apply();
+        };
+
+        _surface = new Border { BorderBrush = Theme.GlassStroke, BorderThickness = new Thickness(1) };
+        Content = _surface;
+        _current = startPage ?? "ai";
+        BuildUi();
+
+        SourceInitialized += (_, _) => ApplyBackdrop();
+        StateChanged += (_, _) =>
+        {
+            if (_maximize != null) _maximize.Glyph = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+            // A maximized borderless window spills past the screen edge by the resize border.
+            _surface.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+        };
+        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        Closing += (_, _) =>
+        {
+            if (_saveTimer.IsEnabled)
+            {
+                _saveTimer.Stop();
+                Apply();
+            }
+        };
+    }
+
+    /// <summary>Builds every text again, e.g. after the app language changes.</summary>
+    public void Rebuild()
+    {
+        _draft = _app.Settings.Clone();
+        BuildUi();
+    }
+
+    private void BuildUi()
+    {
+        Title = Loc.T("settings_title");
         _pages = new()
         {
             ["ai"] = AiPage,
@@ -63,6 +106,10 @@ internal sealed class SettingsWindow : Window
             ["general"] = GeneralPage,
             ["about"] = AboutPage,
         };
+        // Fresh containers: the old ones still belong to the previous layout.
+        _page = new ContentControl();
+        _nav = new StackPanel();
+        _navButtons.Clear();
 
         // ---- sidebar ----
         var logo = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(18, 18, 18, 22) };
@@ -80,7 +127,7 @@ internal sealed class SettingsWindow : Window
         name.FontFamily = Theme.DisplayFont;
         name.Margin = new Thickness(10, 0, 0, 2);
         logo.Children.Add(name);
-        logo.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+        logo.MouseLeftButtonDown += (_, e) => DragFromTitle(e);
 
         AddNav("ai", Theme.Glyph.Robot, Loc.T("nav_ai"));
         AddNav("activation", Theme.Glyph.Mouse, Loc.T("nav_activation"));
@@ -91,75 +138,122 @@ internal sealed class SettingsWindow : Window
         var sidebar = new DockPanel { Width = 220, Background = Theme.B("#0AFFFFFF") };
         DockPanel.SetDock(logo, Dock.Top);
         sidebar.Children.Add(logo);
-        var shortcut = Ui.Label(Loc.Format("sidebar_hint", app.Settings.Hotkey), 11.5, Theme.Faint);
+        var shortcut = Ui.Label(Loc.Format("sidebar_hint", _app.Settings.Hotkey), 11.5, Theme.Faint);
         shortcut.Margin = new Thickness(20, 0, 16, 18);
         DockPanel.SetDock(shortcut, Dock.Bottom);
         sidebar.Children.Add(shortcut);
         sidebar.Children.Add(_nav);
 
-        // ---- top bar ----
-        var close = new IconButton(Theme.Glyph.Close, Loc.T("close"), 34, 11) { CornerRadius = new CornerRadius(8) };
+        // ---- title bar: minimize, maximize, close in the top-right corner ----
+        var minimize = CaptionButton("\uE921", Loc.T("minimize"), danger: false);
+        minimize.Click += () => WindowState = WindowState.Minimized;
+        _maximize = CaptionButton(WindowState == WindowState.Maximized ? "\uE923" : "\uE922", Loc.T("maximize"), danger: false);
+        _maximize.Click += () => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        var close = CaptionButton("\uE8BB", Loc.T("close"), danger: true);
         close.Click += Close;
-        var topBar = new DockPanel { Height = 44, Background = Brushes.Transparent };
-        topBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
-        DockPanel.SetDock(close, Dock.Right);
-        close.Margin = new Thickness(0, 6, 8, 0);
-        close.VerticalAlignment = VerticalAlignment.Top;
-        topBar.Children.Add(close);
-
-        // ---- bottom bar ----
-        var save = new PrimaryButton(Loc.T("save"), Theme.Glyph.Check);
-        save.Click += Save;
-        var cancel = new SecondaryButton(Loc.T("cancel"));
-        cancel.Click += Close;
-        cancel.Margin = new Thickness(0, 0, 10, 0);
-        _savedNote = Ui.Label("", 12.5, Theme.Success);
+        var captions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        _savedNote = Ui.Label("", 12, Theme.Success);
         _savedNote.Margin = new Thickness(0, 0, 14, 0);
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        buttons.Children.Add(_savedNote);
-        buttons.Children.Add(cancel);
-        buttons.Children.Add(save);
-        var bottom = new Border
-        {
-            BorderBrush = Theme.Divider,
-            BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(24, 12, 24, 14),
-            Child = buttons,
-        };
+        captions.Children.Add(_savedNote);
+        captions.Children.Add(minimize);
+        captions.Children.Add(_maximize);
+        captions.Children.Add(close);
+        var titleBar = new DockPanel { Height = 40, Background = Brushes.Transparent, LastChildFill = true };
+        DockPanel.SetDock(captions, Dock.Right);
+        titleBar.Children.Add(captions);
+        titleBar.Children.Add(new Border { Background = Brushes.Transparent });
+        titleBar.MouseLeftButtonDown += (_, e) => DragFromTitle(e);
 
         var scroll = new ScrollViewer
         {
             Content = _page,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Padding = new Thickness(32, 0, 32, 24),
+            Padding = new Thickness(32, 0, 32, 28),
         };
         var main = new DockPanel();
-        DockPanel.SetDock(topBar, Dock.Top);
-        DockPanel.SetDock(bottom, Dock.Bottom);
-        main.Children.Add(topBar);
-        main.Children.Add(bottom);
+        DockPanel.SetDock(titleBar, Dock.Top);
+        main.Children.Add(titleBar);
         main.Children.Add(scroll);
 
         var layout = new DockPanel();
         DockPanel.SetDock(sidebar, Dock.Left);
         layout.Children.Add(sidebar);
-        layout.Children.Add(new Border { Width = 1, Background = Theme.Divider });
+        var divider = new Border { Width = 1, Background = Theme.Divider };
+        DockPanel.SetDock(divider, Dock.Left);
+        layout.Children.Add(divider);
         layout.Children.Add(main);
-        DockPanel.SetDock(layout.Children[1], Dock.Left);
+        _surface.Child = layout;
+        ApplySurface();
+        ShowPage(_current);
+    }
 
-        _surface = new Border
+    private IconButton CaptionButton(string glyph, string tooltip, bool danger)
+    {
+        var button = new IconButton(glyph, tooltip, 46, 10)
         {
-            Background = Theme.WindowFallback,
-            BorderBrush = Theme.GlassStroke,
-            BorderThickness = new Thickness(1),
-            Child = layout,
+            Width = 46,
+            Height = 40,
+            CornerRadius = new CornerRadius(danger ? 0 : 0),
+            VerticalAlignment = VerticalAlignment.Top,
         };
-        Content = _surface;
+        if (danger) button.HoverBrush = Theme.B("#FFC42B1C");
+        return button;
+    }
 
-        SourceInitialized += (_, _) => ApplyBackdrop();
-        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
-        ShowPage(startPage ?? (app.Settings.HasAi ? "ai" : "ai"));
+    private void DragFromTitle(MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            return;
+        }
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            try { DragMove(); } catch (InvalidOperationException) { }
+        }
+    }
+
+    /// <summary>Background of the window, following the glass settings.</summary>
+    private void ApplySurface()
+    {
+        double opacity = _draft.GlassEffect ? _draft.GlassOpacity : 1.0;
+        if (_acrylic && _draft.GlassEffect)
+        {
+            var top = Theme.C("#141826");
+            var bottom = Theme.C("#0B0E17");
+            byte a = (byte)Math.Round(255 * Math.Clamp(opacity * 0.85, 0.25, 0.97));
+            _surface.Background = Theme.Vertical(Color.FromArgb(a, top.R, top.G, top.B), Color.FromArgb((byte)Math.Min(255, a + 20), bottom.R, bottom.G, bottom.B));
+            _surface.BorderThickness = new Thickness(0);
+        }
+        else
+        {
+            _surface.Background = Theme.SolidSurface;
+            _surface.BorderThickness = new Thickness(1);
+        }
+    }
+
+    /// <summary>Marks the draft as changed; it is applied and saved shortly after.</summary>
+    private void Changed()
+    {
+        _saveTimer.Stop();
+        _saveTimer.Start();
+    }
+
+    private void Apply()
+    {
+        bool languageChanged = _draft.UiLanguage != _app.Settings.UiLanguage;
+        _app.ApplySettings(_draft);
+        _draft = _app.Settings.Clone();
+        if (languageChanged)
+        {
+            BuildUi();
+        }
+        ApplySurface();
+        _savedNote.Text = Loc.T("saved");
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        timer.Tick += (_, _) => { _savedNote.Text = ""; timer.Stop(); };
+        timer.Start();
     }
 
     /// <summary>Real acrylic on Windows 11; a solid dark surface elsewhere.</summary>
@@ -177,8 +271,8 @@ internal sealed class SettingsWindow : Window
             {
                 if (HwndSource.FromHwnd(hwnd) is { CompositionTarget: { } target })
                     target.BackgroundColor = Colors.Transparent;
-                _surface.Background = Theme.Vertical(Theme.C("#A6141826"), Theme.C("#C00B0E17"));
-                _surface.BorderThickness = new Thickness(0);
+                _acrylic = true;
+                ApplySurface();
             }
         }
     }
@@ -320,7 +414,7 @@ internal sealed class SettingsWindow : Window
         var providerButtons = new Dictionary<string, Clickable>();
         void SelectProvider(string id)
         {
-            _draft.Provider = id;
+            if (_draft.Provider != id) { _draft.Provider = id; Changed(); }
             foreach (var (key, button) in providerButtons)
             {
                 bool on = key == id;
@@ -328,7 +422,7 @@ internal sealed class SettingsWindow : Window
                 button.BorderThickness = new Thickness(on ? 1.5 : 1);
                 button.NormalBrush = on ? Theme.B("#1A8B5CF6") : Theme.Field;
             }
-            details.Content = id == ProviderIds.Local ? LocalDetails() : CloudDetails(id);
+            details.Content = id == ProviderIds.Local ? LocalPanel() : CloudDetails(id);
         }
         foreach (var (id, glyph, title, help) in new[]
                  {
@@ -386,6 +480,7 @@ internal sealed class SettingsWindow : Window
                 case ProviderIds.Claude: _draft.ClaudeKey = key.Value; break;
                 default: _draft.GeminiKey = key.Value; break;
             }
+            Changed();
         }
         key.Changed += StoreKey;
 
@@ -397,7 +492,7 @@ internal sealed class SettingsWindow : Window
             ("balanced", Loc.T("quality_balanced")),
             ("smart", Loc.T("quality_smart")),
         }, _draft.Quality);
-        quality.Changed += q => _draft.Quality = q;
+        quality.Changed += q => { _draft.Quality = q; Changed(); };
 
         var status = Ui.Label("", 12.5, Theme.Muted);
         status.Margin = new Thickness(12, 0, 0, 0);
@@ -420,13 +515,13 @@ internal sealed class SettingsWindow : Window
             testRow);
     }
 
-    private FrameworkElement LocalDetails()
+    private FrameworkElement ServerDetails()
     {
         var url = new GlassField("http://127.0.0.1:11434/v1", _draft.LocalUrl);
-        url.Box.TextChanged += (_, _) => _draft.LocalUrl = url.Text.Trim();
+        url.Box.TextChanged += (_, _) => { _draft.LocalUrl = url.Text.Trim(); Changed(); };
         var model = new Picker(Array.Empty<Picker.Item>(), _draft.LocalModel);
         if (string.IsNullOrEmpty(_draft.LocalModel)) model.SetPlaceholder(Loc.T("pick_model"));
-        model.Changed += m => _draft.LocalModel = m;
+        model.Changed += m => { _draft.LocalModel = m; Changed(); };
         var found = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         var status = Ui.Label("", 12.5, Theme.Muted);
         status.Margin = new Thickness(12, 0, 0, 0);
@@ -457,6 +552,7 @@ internal sealed class SettingsWindow : Window
             void UseServer(LocalServer server)
             {
                 _draft.LocalUrl = server.BaseUrl;
+                Changed();
                 if (url.Text != server.BaseUrl) url.Text = server.BaseUrl;
                 var items = server.Models.Select(m => new Picker.Item(m, m)).ToList();
                 if (!server.Models.Contains(_draft.LocalModel))
@@ -488,7 +584,7 @@ internal sealed class SettingsWindow : Window
         modelRow.Children.Add(model);
 
         var key = new SecretField(Loc.T("optional"), _draft.LocalKey);
-        key.Changed += () => _draft.LocalKey = key.Value;
+        key.Changed += () => { _draft.LocalKey = key.Value; Changed(); };
 
         var testStatus = Ui.Label("", 12.5, Theme.Muted);
         testStatus.Margin = new Thickness(12, 0, 0, 0);
@@ -530,6 +626,196 @@ internal sealed class SettingsWindow : Window
         };
     }
 
+    /// <summary>Local AI: a model file MouseIA runs itself, or an external server.</summary>
+    private FrameworkElement LocalPanel()
+    {
+        var holder = new StackPanel();
+        var content = new ContentControl();
+        var mode = new Segmented(new[]
+        {
+            ("file", Loc.T("local_mode_file")),
+            ("server", Loc.T("local_mode_server")),
+        }, _draft.LocalMode);
+        mode.Margin = new Thickness(0, 0, 0, 14);
+        mode.Changed += m =>
+        {
+            _draft.LocalMode = m;
+            Changed();
+            content.Content = m == "file" ? FileDetails() : ServerDetails();
+        };
+        holder.Children.Add(mode);
+        holder.Children.Add(content);
+        content.Content = _draft.LocalMode == "file" ? FileDetails() : ServerDetails();
+        return holder;
+    }
+
+    private static string SizeText(string path)
+    {
+        try
+        {
+            double gb = new System.IO.FileInfo(path).Length / 1073741824.0;
+            return gb >= 1 ? $"{gb:0.0} GB" : $"{gb * 1024:0} MB";
+        }
+        catch (Exception) { return ""; }
+    }
+
+    /// <summary>Pick a .gguf / .litertlm file downloaded from Hugging Face; MouseIA runs it.</summary>
+    private FrameworkElement FileDetails()
+    {
+        var fileName = Ui.Label("", 13, Theme.Text, FontWeights.SemiBold);
+        var fileInfo = Ui.Label("", 12, Theme.Muted);
+        var vision = Ui.Label("", 12.5, Theme.Muted);
+        var engine = Ui.Label("", 12.5, Theme.Muted);
+        var visionButton = new SecondaryButton(Loc.T("pick_mmproj"), Theme.Glyph.Picture) { Height = 30, Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        var engineActions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+
+        void Refresh()
+        {
+            var file = _draft.LocalModelFile;
+            bool has = !string.IsNullOrEmpty(file) && System.IO.File.Exists(file);
+            fileName.Text = has ? System.IO.Path.GetFileName(file) : Loc.T("no_model_file");
+            fileName.Foreground = has ? Theme.Text : Theme.Faint;
+            fileInfo.Text = has ? $"{SizeText(file)} · {System.IO.Path.GetDirectoryName(file)}" : Loc.T("model_file_hint");
+            engineActions.Children.Clear();
+            if (!has)
+            {
+                vision.Text = "";
+                engine.Text = "";
+                visionButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+            if (LocalEngine.IsLiteRt(file))
+            {
+                visionButton.Visibility = Visibility.Collapsed;
+                vision.Text = Loc.T("vision_litert");
+                vision.Foreground = Theme.Success;
+                var cli = LocalEngine.FindLiteRtCli();
+                engine.Text = cli != null ? Loc.T("engine_litert_found") : Loc.T("engine_litert_missing");
+                engine.Foreground = cli != null ? Theme.Success : Theme.Danger;
+                if (cli == null)
+                {
+                    var copy = new SecondaryButton(Loc.T("copy_install_command"), Theme.Glyph.Copy) { Height = 30 };
+                    copy.Click += () => Clipboard2.SetText("pip install --upgrade litert-lm");
+                    engineActions.Children.Add(copy);
+                }
+                return;
+            }
+            var mmproj = System.IO.File.Exists(_draft.LocalMmproj) ? _draft.LocalMmproj : LocalEngine.FindMmproj(file);
+            visionButton.Visibility = Visibility.Visible;
+            if (mmproj != null)
+            {
+                vision.Text = Loc.Format("vision_on", System.IO.Path.GetFileName(mmproj));
+                vision.Foreground = Theme.Success;
+            }
+            else
+            {
+                vision.Text = Loc.T("vision_off");
+                vision.Foreground = Theme.Muted;
+            }
+            bool installed = LocalEngine.InstalledLlamaServer("vulkan") != null || LocalEngine.InstalledLlamaServer("cpu") != null;
+            engine.Text = installed ? Loc.T("engine_llama_ready") : Loc.T("engine_llama_missing");
+            engine.Foreground = installed ? Theme.Success : Theme.Muted;
+        }
+
+        var pick = new PrimaryButton(Loc.T("pick_model_file"), Theme.Glyph.Folder) { HorizontalAlignment = HorizontalAlignment.Left };
+        pick.Click += () =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = Loc.T("pick_model_file"),
+                Filter = Loc.T("model_files") + "|*.gguf;*.litertlm|GGUF|*.gguf|LiteRT-LM|*.litertlm",
+            };
+            if (System.IO.File.Exists(_draft.LocalModelFile))
+                dialog.InitialDirectory = System.IO.Path.GetDirectoryName(_draft.LocalModelFile);
+            if (dialog.ShowDialog(this) != true) return;
+            if (System.IO.Path.GetFileName(dialog.FileName).Contains("mmproj", StringComparison.OrdinalIgnoreCase))
+            {
+                // That's the vision part, not the model itself.
+                _draft.LocalMmproj = dialog.FileName;
+                fileInfo.Text = Loc.T("picked_mmproj_as_model");
+                Changed();
+                return;
+            }
+            _draft.LocalModelFile = dialog.FileName;
+            if (!string.IsNullOrEmpty(_draft.LocalMmproj) &&
+                System.IO.Path.GetDirectoryName(_draft.LocalMmproj) != System.IO.Path.GetDirectoryName(dialog.FileName))
+                _draft.LocalMmproj = "";
+            Changed();
+            Refresh();
+        };
+        visionButton.Click += () =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = Loc.T("pick_mmproj"), Filter = "mmproj|*.gguf" };
+            if (System.IO.File.Exists(_draft.LocalModelFile))
+                dialog.InitialDirectory = System.IO.Path.GetDirectoryName(_draft.LocalModelFile);
+            if (dialog.ShowDialog(this) != true) return;
+            _draft.LocalMmproj = dialog.FileName;
+            Changed();
+            Refresh();
+        };
+
+        var backend = new Segmented(new[] { ("auto", Loc.T("backend_gpu")), ("cpu", Loc.T("backend_cpu")) }, _draft.LocalBackend);
+        backend.Changed += b => { _draft.LocalBackend = b; Changed(); };
+
+        var testStatus = Ui.Label("", 12.5, Theme.Muted);
+        testStatus.Margin = new Thickness(12, 0, 0, 0);
+        var test = new SecondaryButton(Loc.T("start_and_test"), Theme.Glyph.Play);
+        test.Click += async () =>
+        {
+            Apply();
+            await TestAsync(testStatus);
+            Refresh();
+        };
+        var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        testRow.Children.Add(test);
+        testRow.Children.Add(testStatus);
+
+        var fileBlock = new StackPanel();
+        fileBlock.Children.Add(pick);
+        var chosen = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+        chosen.Children.Add(fileName);
+        chosen.Children.Add(fileInfo);
+        fileBlock.Children.Add(chosen);
+
+        var visionBlock = new StackPanel();
+        visionBlock.Children.Add(vision);
+        visionBlock.Children.Add(visionButton);
+
+        var engineBlock = new StackPanel();
+        engineBlock.Children.Add(engine);
+        engineBlock.Children.Add(engineActions);
+
+        var help = new StackPanel();
+        help.Children.Add(Ui.Label(Loc.T("file_howto"), 12.5, Theme.Muted));
+        var links = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        foreach (var (label, link) in new[]
+                 {
+                     (Loc.T("hf_gguf_models"), "https://huggingface.co/models?library=gguf&sort=trending"),
+                     ("LiteRT-LM", "https://huggingface.co/litert-community"),
+                 })
+        {
+            var l = Link(label, link);
+            l.Margin = new Thickness(0, 0, 16, 0);
+            links.Children.Add(l);
+        }
+        help.Children.Add(links);
+
+        Refresh();
+        return new StackPanel
+        {
+            Children =
+            {
+                Section(
+                    Field(Loc.T("model_file"), Loc.T("model_file_help"), fileBlock),
+                    Field(Loc.T("vision"), null, visionBlock),
+                    Field(Loc.T("engine"), null, engineBlock),
+                    Field(Loc.T("backend"), Loc.T("backend_help"), backend),
+                    testRow),
+                Section(help),
+            },
+        };
+    }
+
     private static bool LooksMultimodal(string model)
     {
         var m = model.ToLowerInvariant();
@@ -544,26 +830,28 @@ internal sealed class SettingsWindow : Window
         if (!_draft.HasAi)
         {
             status.Foreground = Theme.Danger;
-            status.Text = Loc.T(_draft.Provider == ProviderIds.Local ? "no_local_server" : "missing_key");
+            status.Text = Loc.T(_draft.Provider != ProviderIds.Local ? "missing_key" : _draft.LocalMode == "file" ? "engine_no_file" : "no_local_server");
             return;
         }
-        var request = new AiRequest
-        {
-            Provider = _draft.Provider,
-            ApiKey = _draft.KeyFor(_draft.Provider),
-            BaseUrl = _draft.LocalUrl,
-            Models = ModelCatalog.ModelsFor(_draft),
-            SystemPrompt = "Reply with exactly: OK",
-            History = new[] { new ChatTurn(true, "Say OK.") },
-            MaxOutputTokens = 64,
-        };
+        var settings = _draft.Clone();
         var watch = Stopwatch.StartNew();
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-            var result = await Task.Run(() => AiClient.StreamAsync(request, _ => { }, cts.Token));
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            var progress = new Progress<string>(p => { status.Foreground = Theme.Muted; status.Text = p; });
+            var prepared = await Task.Run(() => AiSetup.PrepareAsync(settings, "Reply with exactly: OK",
+                new[] { new ChatTurn(true, "Say OK.") }, Array.Empty<string>(), 64, progress, cts.Token));
+            status.Text = Loc.T("testing");
+            watch.Restart();
+            var result = await Task.Run(() => AiClient.StreamAsync(prepared.Request, _ => { }, cts.Token));
             status.Foreground = Theme.Success;
-            status.Text = Loc.Format("test_ok", result.Model, watch.Elapsed.TotalSeconds.ToString("0.0"));
+            var name = settings.UsesModelFile ? System.IO.Path.GetFileNameWithoutExtension(settings.LocalModelFile) : result.Model;
+            status.Text = Loc.Format("test_ok", name, watch.Elapsed.TotalSeconds.ToString("0.0"));
+        }
+        catch (LocalEngineException ex)
+        {
+            status.Foreground = Theme.Danger;
+            status.Text = ex.Message;
         }
         catch (AiException ex)
         {
@@ -589,10 +877,10 @@ internal sealed class SettingsWindow : Window
     private FrameworkElement ActivationPage()
     {
         var page = Page(Loc.T("nav_activation"), Loc.T("activation_subtitle"));
-        page.Children.Add(Section(Field(Loc.T("hotkey"), Loc.T("hotkey_help"), new HotkeyBox(_draft.Hotkey, h => _draft.Hotkey = h, _app))));
+        page.Children.Add(Section(Field(Loc.T("hotkey"), Loc.T("hotkey_help"), new HotkeyBox(_draft.Hotkey, h => { _draft.Hotkey = h; Changed(); }, _app))));
 
         var sensitivity = DarkSlider(1, 10, _draft.ShakeSensitivity, 1);
-        sensitivity.ValueChanged += (_, e) => _draft.ShakeSensitivity = (int)e.NewValue;
+        sensitivity.ValueChanged += (_, e) => { _draft.ShakeSensitivity = (int)e.NewValue; Changed(); };
         var scale = new DockPanel { Width = 260, HorizontalAlignment = HorizontalAlignment.Left };
         var low = Ui.Label(Loc.T("strong_shake"), 11.5, Theme.Faint);
         var high = Ui.Label(Loc.T("light_shake"), 11.5, Theme.Faint);
@@ -603,11 +891,11 @@ internal sealed class SettingsWindow : Window
         sensitivityBlock.Children.Add(sensitivity);
         sensitivityBlock.Children.Add(scale);
         page.Children.Add(Section(
-            ToggleRow(Loc.T("shake"), Loc.T("shake_help"), _draft.Shake, v => _draft.Shake = v),
+            ToggleRow(Loc.T("shake"), Loc.T("shake_help"), _draft.Shake, v => { _draft.Shake = v; Changed(); }),
             Field(Loc.T("sensitivity"), null, sensitivityBlock),
-            ToggleRow(Loc.T("fullscreen_off"), Loc.T("fullscreen_off_help"), _draft.DisableInFullscreen, v => _draft.DisableInFullscreen = v)));
+            ToggleRow(Loc.T("fullscreen_off"), Loc.T("fullscreen_off_help"), _draft.DisableInFullscreen, v => { _draft.DisableInFullscreen = v; Changed(); })));
         page.Children.Add(Section(
-            ToggleRow(Loc.T("type_to_ask"), Loc.T("type_to_ask_help"), _draft.TypeToAsk, v => _draft.TypeToAsk = v)));
+            ToggleRow(Loc.T("type_to_ask"), Loc.T("type_to_ask_help"), _draft.TypeToAsk, v => { _draft.TypeToAsk = v; Changed(); })));
         return page;
     }
 
@@ -619,11 +907,11 @@ internal sealed class SettingsWindow : Window
             .OrderBy(l => Loc.IsPortuguese ? l.Portuguese : l.English, StringComparer.CurrentCulture)
             .Select(l => new Picker.Item(l.Code, Loc.IsPortuguese ? l.Portuguese : l.English, l.Native)));
         var target = new Picker(languageItems, _draft.TranslateTo) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
-        target.Changed += c => _draft.TranslateTo = c;
+        target.Changed += c => { _draft.TranslateTo = c; Changed(); };
         var mic = new Picker(languageItems, _draft.VoiceInputLanguage) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
-        mic.Changed += c => _draft.VoiceInputLanguage = c;
+        mic.Changed += c => { _draft.VoiceInputLanguage = c; Changed(); };
         var rate = DarkSlider(0.5, 2.0, _draft.VoiceRate, 0.1);
-        rate.ValueChanged += (_, e) => _draft.VoiceRate = Math.Round(e.NewValue, 1);
+        rate.ValueChanged += (_, e) => { _draft.VoiceRate = Math.Round(e.NewValue, 1); Changed(); };
 
         var voices = SpeechService.Voices;
         var voiceList = string.Join(", ", voices.Select(v => v.Language).Distinct().OrderBy(l => l));
@@ -646,7 +934,7 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(Section(
             Field(Loc.T("translate_to"), Loc.T("translate_to_help"), target),
-            ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => _draft.SpeakTranslation = v)));
+            ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => { _draft.SpeakTranslation = v; Changed(); })));
         page.Children.Add(Section(
             Field(Loc.T("mic_language"), Loc.T("mic_language_help"), mic),
             Field(Loc.T("voice_rate"), null, rate),
@@ -659,13 +947,55 @@ internal sealed class SettingsWindow : Window
     {
         var page = Page(Loc.T("nav_general"), Loc.T("general_subtitle"));
         var ui = new Segmented(new[] { ("auto", Loc.T("automatic")), ("pt", "Português"), ("en", "English") }, _draft.UiLanguage);
-        ui.Changed += v => _draft.UiLanguage = v;
+        // The language switches right away: the whole window is rebuilt in it.
+        ui.Changed += v =>
+        {
+            _draft.UiLanguage = v;
+            _saveTimer.Stop();
+            Apply();
+        };
         page.Children.Add(Section(
             Field(Loc.T("ui_language"), Loc.T("ui_language_help"), ui),
-            ToggleRow(Loc.T("start_with_windows"), null, _draft.StartWithWindows, v => _draft.StartWithWindows = v)));
+            ToggleRow(Loc.T("start_with_windows"), null, _draft.StartWithWindows, v => { _draft.StartWithWindows = v; Changed(); })));
+
+        var opacity = DarkSlider(30, 100, Math.Round(_draft.GlassOpacity * 100), 5);
+        var opacityValue = Ui.Label($"{Math.Round(_draft.GlassOpacity * 100)}%", 12.5, Theme.Muted);
+        opacityValue.Margin = new Thickness(12, 0, 0, 0);
+        opacity.ValueChanged += (_, e) =>
+        {
+            _draft.GlassOpacity = e.NewValue / 100.0;
+            opacityValue.Text = $"{e.NewValue:0}%";
+            ApplySurface();
+            Changed();
+        };
+        var opacityRow = new StackPanel { Orientation = Orientation.Horizontal };
+        opacityRow.Children.Add(opacity);
+        opacityRow.Children.Add(opacityValue);
+        var scale = new DockPanel { Width = 260, HorizontalAlignment = HorizontalAlignment.Left };
+        var clear = Ui.Label(Loc.T("more_transparent"), 11.5, Theme.Faint);
+        var solid = Ui.Label(Loc.T("more_solid"), 11.5, Theme.Faint);
+        DockPanel.SetDock(solid, Dock.Right);
+        scale.Children.Add(solid);
+        scale.Children.Add(clear);
+        var opacityBlock = new StackPanel();
+        opacityBlock.Children.Add(opacityRow);
+        opacityBlock.Children.Add(scale);
+        var opacityField = Field(Loc.T("glass_opacity"), Loc.T("glass_opacity_help"), opacityBlock);
+        opacityField.IsEnabled = _draft.GlassEffect;
         page.Children.Add(Section(
-            ToggleRow(Loc.T("auto_ocr"), Loc.T("auto_ocr_help"), _draft.AutoOcr, v => _draft.AutoOcr = v),
-            ToggleRow(Loc.T("auto_qr"), Loc.T("auto_qr_help"), _draft.AutoQr, v => _draft.AutoQr = v)));
+            ToggleRow(Loc.T("glass_effect"), Loc.T("glass_effect_help"), _draft.GlassEffect, v =>
+            {
+                _draft.GlassEffect = v;
+                opacityField.IsEnabled = v;
+                opacityField.Opacity = v ? 1 : 0.45;
+                ApplySurface();
+                Changed();
+            }),
+            opacityField));
+        if (!_draft.GlassEffect) opacityField.Opacity = 0.45;
+        page.Children.Add(Section(
+            ToggleRow(Loc.T("auto_ocr"), Loc.T("auto_ocr_help"), _draft.AutoOcr, v => { _draft.AutoOcr = v; Changed(); }),
+            ToggleRow(Loc.T("auto_qr"), Loc.T("auto_qr_help"), _draft.AutoQr, v => { _draft.AutoQr = v; Changed(); })));
         var folder = new SecondaryButton(Loc.T("open_data_folder"), Theme.Glyph.Folder);
         folder.Click += () => OpenUrl(AppSettings.DefaultFolder);
         var ocr = Ui.Label(Loc.Format("ocr_languages", SafeOcrLanguages()), 12, Theme.Muted);
@@ -692,13 +1022,6 @@ internal sealed class SettingsWindow : Window
                   ("GitHub", "https://github.com/odorizzioficial"),
                   ("Instagram", "https://www.instagram.com/odorizzidicas"),
                   ("TikTok", "https://www.tiktok.com/@odorizzioficial"))));
-        page.Children.Add(Section(
-            Ui.Label(Loc.T("credits_title"), 13, Theme.Text, FontWeights.SemiBold),
-            Spacer(4),
-            Ui.Label(Loc.T("credits_text"), 12.5, Theme.Muted),
-            Spacer(6),
-            Links(("Magic Pointer", "https://github.com/rono-zeroseven/magic-pointer"),
-                  ("ZXing.Net (Apache 2.0)", "https://github.com/micjahn/ZXing.Net"))));
         var quit = new SecondaryButton(Loc.T("quit"), Theme.Glyph.Power);
         quit.Click += () => _app.Exit();
         page.Children.Add(quit);
@@ -717,16 +1040,6 @@ internal sealed class SettingsWindow : Window
         return panel;
     }
 
-    // ---- saving ----
-
-    private void Save()
-    {
-        _app.ApplySettings(_draft);
-        _savedNote.Text = Loc.T("saved");
-        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-        timer.Tick += (_, _) => { _savedNote.Text = ""; timer.Stop(); };
-        timer.Start();
-    }
 }
 
 /// <summary>Simple grid that flows children into N columns.</summary>

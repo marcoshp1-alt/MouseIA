@@ -29,6 +29,7 @@ internal sealed class AppController : IDisposable
     private OverlayWindow? _overlay;
     private volatile bool _overlayOpen;
     private volatile bool _resetShake;
+    private volatile bool _shakeEnabled;
     private SettingsWindow? _settingsWindow;
     private DateTime _lastActivation;
 
@@ -130,6 +131,7 @@ internal sealed class AppController : IDisposable
         _shake.Sensitivity = Settings.ShakeSensitivity;
         _shake.Scale = Math.Max(1.0, VisualScale());
         _shake.Reset();
+        _shakeEnabled = Settings.Shake;
         if (Settings.Shake)
         {
             if (_hook == null)
@@ -160,7 +162,7 @@ internal sealed class AppController : IDisposable
             _resetShake = false;
             _shake.Reset();
         }
-        if (_overlayOpen) return;
+        if (_overlayOpen || !_shakeEnabled) return;
         if (!_shake.Add(x, y, time)) return;
         _application.Dispatcher.BeginInvoke(DispatcherPriority.Send, () =>
         {
@@ -258,26 +260,27 @@ internal sealed class AppController : IDisposable
     {
         bool hotkeyChanged = next.Hotkey != Settings.Hotkey;
         bool languageChanged = next.UiLanguage != Settings.UiLanguage;
+        bool modelChanged = next.LocalModelFile != Settings.LocalModelFile || next.LocalMmproj != Settings.LocalMmproj ||
+                            next.LocalBackend != Settings.LocalBackend || next.Provider != Settings.Provider ||
+                            next.LocalMode != Settings.LocalMode;
         Settings = next.Clone();
         Settings.Normalize();
         SaveSettings();
         if (hotkeyChanged || _hotkeyId == 0) RegisterHotkey();
         ApplyShake();
         StartupRegistration.Apply(Settings.StartWithWindows);
+        if (modelChanged) Services.LocalEngine.Stop(); // the next question starts the new model
         if (languageChanged)
         {
+            // The settings window rebuilds itself; menus and the pointer read the language when they open.
             Loc.Apply(Settings.UiLanguage);
-            if (_settingsWindow != null)
-            {
-                var window = _settingsWindow;
-                window.Closed += (_, _) => _application.Dispatcher.BeginInvoke(() => OpenSettings("general"));
-                window.Close();
-            }
+            _tray?.SetTip(TrayTip());
         }
     }
 
     public void Exit()
     {
+        Services.LocalEngine.Stop();
         _overlay?.Close();
         _settingsWindow?.Close();
         Dispose();

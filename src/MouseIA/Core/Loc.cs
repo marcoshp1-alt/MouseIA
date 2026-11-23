@@ -45,8 +45,8 @@ public static class Loc
     private static readonly Dictionary<string, (string Pt, string En)> Strings = new()
     {
         // Overlay
-        ["hint"] = ("Clique numa janela ou arraste para selecionar · Esc sai", "Click a window or drag to select · Esc exits"),
-        ["hint_typing"] = ("Clique numa janela, arraste para selecionar ou comece a digitar · Esc sai", "Click a window, drag to select or just start typing · Esc exits"),
+        ["hint"] = ("Selecione qualquer coisa para perguntar à IA", "Select anything to ask the AI"),
+        ["hint_typing"] = ("Selecione qualquer coisa ou comece a digitar para perguntar", "Select anything or start typing to ask"),
         ["selection"] = ("Seleção", "Selection"),
 
         // Card
@@ -63,8 +63,6 @@ public static class Loc
         ["copy_text_tip"] = ("Reconhece o texto da imagem (offline) e copia", "Recognizes the text in the image (offline) and copies it"),
         ["qr_code"] = ("QR Code", "QR code"),
         ["qr_tip"] = ("Lê QR Codes e códigos de barras da seleção", "Reads QR codes and barcodes in the selection"),
-        ["voice_translator"] = ("Tradutor de voz", "Voice translator"),
-        ["voice_tip"] = ("Fale num idioma e ouça em outro", "Speak in one language, hear it in another"),
         ["open_file"] = ("Arquivo", "File"),
         ["open_file_tip"] = ("Imagens, PDF, vídeos, Word, PowerPoint, textos… (ou arraste para cá)", "Images, PDF, videos, Word, PowerPoint, text… (or drop them here)"),
         ["prompt_hint"] = ("Pergunte ou peça algo…", "Ask or request anything…"),
@@ -97,7 +95,6 @@ public static class Loc
         ["pdf_pages"] = ("Do PDF, entraram as primeiras páginas ({0}).", "The first pages of the PDF were added ({0})."),
         ["video_frames"] = ("Do vídeo {0} ({1}), entraram 3 quadros: início, meio e fim. Para um momento exato, pause o vídeo e selecione na tela.", "3 frames of {0} ({1}) were added: start, middle and end. For an exact moment, pause the video and select it on screen."),
         ["needs_ai"] = ("Para conversar, configure uma IA: uma chave grátis do Gemini ou uma IA local (Ollama, LM Studio). Copiar texto e ler QR Code já funcionam sem IA.", "To chat, set up an AI: a free Gemini key or a local AI (Ollama, LM Studio). Copy text and QR codes already work without one."),
-        ["needs_ai_voice"] = ("Sem uma IA configurada, a tradução abre no Google Tradutor.", "Without an AI set up, the translation opens in Google Translate."),
         ["configure_ai"] = ("Configurar IA", "Set up AI"),
         ["check_settings"] = ("Confira a chave e o provedor nas configurações.", "Check the key and provider in settings."),
         ["open_settings"] = ("Abrir configurações", "Open settings"),
@@ -135,13 +132,6 @@ public static class Loc
 
         // Voice
         ["windows_language"] = ("Idioma do Windows", "Windows language"),
-        ["swap_languages"] = ("Inverter idiomas", "Swap languages"),
-        ["tap_and_speak"] = ("Toque no microfone e fale", "Tap the mic and speak"),
-        ["tap_to_continue"] = ("Toque para falar de novo", "Tap to speak again"),
-        ["or_type_here"] = ("…ou digite aqui e aperte Enter", "…or type here and press Enter"),
-        ["translating"] = ("Traduzindo…", "Translating…"),
-        ["didnt_hear"] = ("Não ouvi nada. Toque e tente de novo.", "Didn't hear anything. Tap and try again."),
-        ["translate_google"] = ("Traduzir no Google", "Translate with Google"),
         ["speech_privacy"] = ("O reconhecimento de fala online está desligado no Windows.", "Online speech recognition is turned off in Windows."),
         ["open_privacy"] = ("Ativar nas configurações", "Turn it on in settings"),
         ["use_voice_typing"] = ("Usar digitação por voz (Win+H)", "Use voice typing (Win+H)"),
@@ -153,6 +143,63 @@ public static class Loc
         ["speech_settings"] = ("Configurações de fala", "Speech settings"),
         ["speak_failed"] = ("Não consegui reproduzir a voz.", "Couldn't play the voice."),
 
+        // Listen to translation
+        ["listen_translation"] = ("Ouvir tradução", "Hear translation"),
+        ["listen_translation_tip"] = ("Traduz a seleção para o idioma escolhido e lê em voz alta", "Translates the selection into the chosen language and reads it aloud"),
+        ["listen_translation_x"] = ("Traduzir para {0} e ler em voz alta", "Translate into {0} and read aloud"),
+        ["no_vision_note"] = ("Este modelo não vê imagens: usei o texto reconhecido na seleção.", "This model can't see images: the recognized text was used instead."),
+        ["check_local"] = ("Confira o arquivo do modelo nas configurações.", "Check the model file in settings."),
+
+        // Window
+        ["minimize"] = ("Minimizar", "Minimize"),
+        ["maximize"] = ("Maximizar", "Maximize"),
+
+        // Look
+        ["glass_effect"] = ("Efeito vidro", "Glass effect"),
+        ["glass_effect_help"] = ("Mostra a tela desfocada por trás do cartão e das janelas do MouseIA.", "Shows the blurred screen behind MouseIA's card and windows."),
+        ["glass_opacity"] = ("Opacidade do vidro", "Glass opacity"),
+        ["glass_opacity_help"] = ("Menos opacidade deixa ver mais do que está atrás.", "Lower opacity shows more of what's behind."),
+        ["more_transparent"] = ("Mais transparente", "More transparent"),
+        ["more_solid"] = ("Mais sólido", "More solid"),
+
+        // Local model file
+        ["local_mode_file"] = ("Arquivo de modelo", "Model file"),
+        ["local_mode_server"] = ("Servidor (Ollama, LM Studio…)", "Server (Ollama, LM Studio…)"),
+        ["model_file"] = ("Modelo", "Model"),
+        ["model_file_help"] = ("Escolha um arquivo .gguf ou .litertlm baixado do Hugging Face. O MouseIA roda ele sozinho, sem instalar mais nada.", "Pick a .gguf or .litertlm file downloaded from Hugging Face. MouseIA runs it by itself, nothing else to install."),
+        ["pick_model_file"] = ("Escolher arquivo…", "Choose file…"),
+        ["model_files"] = ("Modelos de IA", "AI models"),
+        ["no_model_file"] = ("Nenhum arquivo escolhido", "No file chosen"),
+        ["model_file_hint"] = ("Ex.: gemma-4-E4B-it-Q4_K_M.gguf", "E.g. gemma-4-E4B-it-Q4_K_M.gguf"),
+        ["picked_mmproj_as_model"] = ("Esse é o arquivo de visão (mmproj). Ele foi guardado; agora escolha o arquivo do modelo.", "That's the vision file (mmproj). It was kept; now pick the model file."),
+        ["vision"] = ("Visão (perguntar sobre imagens)", "Vision (asking about images)"),
+        ["vision_on"] = ("Ativada com {0}", "On, with {0}"),
+        ["vision_off"] = ("Desativada: o modelo vai ler só o texto da seleção. Para ver imagens, baixe também o arquivo mmproj do mesmo modelo e coloque na mesma pasta.", "Off: the model will read only the text of the selection. To see images, also download the model's mmproj file into the same folder."),
+        ["vision_litert"] = ("Modelos LiteRT-LM Gemma já entendem imagens.", "LiteRT-LM Gemma models already understand images."),
+        ["pick_mmproj"] = ("Escolher arquivo mmproj…", "Choose mmproj file…"),
+        ["engine"] = ("Motor", "Engine"),
+        ["engine_llama_ready"] = ("llama.cpp instalado e pronto.", "llama.cpp installed and ready."),
+        ["engine_llama_missing"] = ("llama.cpp será baixado automaticamente no primeiro uso (cerca de 40 MB).", "llama.cpp will download automatically on first use (about 40 MB)."),
+        ["engine_litert_found"] = ("LiteRT-LM encontrado.", "LiteRT-LM found."),
+        ["engine_litert_missing"] = ("Para arquivos .litertlm é preciso o LiteRT-LM. Instale o Python e rode: pip install --upgrade litert-lm", "For .litertlm files you need LiteRT-LM. Install Python and run: pip install --upgrade litert-lm"),
+        ["copy_install_command"] = ("Copiar comando", "Copy command"),
+        ["backend"] = ("Processamento", "Processing"),
+        ["backend_help"] = ("GPU é bem mais rápido. Se a placa de vídeo não funcionar, o MouseIA usa o processador sozinho.", "GPU is much faster. If the graphics card doesn't work, MouseIA falls back to the processor."),
+        ["backend_gpu"] = ("Placa de vídeo (GPU)", "Graphics card (GPU)"),
+        ["backend_cpu"] = ("Processador (CPU)", "Processor (CPU)"),
+        ["start_and_test"] = ("Iniciar e testar", "Start and test"),
+        ["file_howto"] = ("Onde baixar: no Hugging Face, procure o modelo em GGUF e baixe a versão Q4_K_M (boa qualidade e leve). Para visão, baixe também o arquivo mmproj da mesma página.", "Where to get one: on Hugging Face, find the model in GGUF and download the Q4_K_M version (good quality, light). For vision, also download the mmproj file from the same page."),
+        ["hf_gguf_models"] = ("Modelos GGUF no Hugging Face", "GGUF models on Hugging Face"),
+        ["engine_no_file"] = ("Escolha o arquivo do modelo em Configurações > Inteligência artificial.", "Pick the model file in Settings > Artificial intelligence."),
+        ["engine_finding"] = ("Procurando o llama.cpp…", "Finding llama.cpp…"),
+        ["engine_downloading"] = ("Baixando o llama.cpp… {0}", "Downloading llama.cpp… {0}"),
+        ["engine_extracting"] = ("Instalando o llama.cpp…", "Installing llama.cpp…"),
+        ["engine_loading"] = ("Carregando o modelo na memória…", "Loading the model into memory…"),
+        ["engine_importing"] = ("Preparando o modelo LiteRT-LM…", "Preparing the LiteRT-LM model…"),
+        ["engine_failed"] = ("O modelo não iniciou. {0}", "The model didn't start. {0}"),
+        ["engine_no_download"] = ("Não consegui baixar o llama.cpp. Verifique a internet e tente de novo.", "Couldn't download llama.cpp. Check the internet and try again."),
+        ["engine_no_litert"] = ("LiteRT-LM não encontrado. Instale com: pip install --upgrade litert-lm", "LiteRT-LM not found. Install it with: pip install --upgrade litert-lm"),
+
         // Settings shell
         ["settings_title"] = ("Configurações do MouseIA", "MouseIA settings"),
         ["nav_ai"] = ("Inteligência artificial", "Artificial intelligence"),
@@ -161,8 +208,6 @@ public static class Loc
         ["nav_general"] = ("Geral", "General"),
         ["nav_about"] = ("Sobre", "About"),
         ["sidebar_hint"] = ("Abra o MouseIA com {0} ou balançando o mouse.", "Open MouseIA with {0} or by shaking the mouse."),
-        ["save"] = ("Salvar", "Save"),
-        ["cancel"] = ("Fechar", "Close"),
         ["saved"] = ("Salvo ✓", "Saved ✓"),
         ["nothing_found"] = ("Nada encontrado", "Nothing found"),
         ["show_hide"] = ("Mostrar/ocultar", "Show/hide"),
@@ -253,8 +298,6 @@ public static class Loc
         ["version"] = ("Versão {0}", "Version {0}"),
         ["about_text"] = ("Selecione qualquer coisa na tela e pergunte à IA, traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e arquivos e leia QR Codes.", "Select anything on screen and ask AI, translate into any language (even by voice), copy text from images, videos and files, and read QR codes."),
         ["made_by"] = ("Feito por Odorizzi", "Made by Odorizzi"),
-        ["credits_title"] = ("Créditos", "Credits"),
-        ["credits_text"] = ("Inspirado no Magic Pointer, mod para Windhawk de Rono (licença MIT). Leitura de códigos com ZXing.Net (licença Apache 2.0).", "Inspired by Magic Pointer, a Windhawk mod by Rono (MIT license). Code reading by ZXing.Net (Apache 2.0 license)."),
         ["quit"] = ("Sair do MouseIA", "Quit MouseIA"),
 
         // Tray

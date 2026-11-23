@@ -18,6 +18,11 @@ internal static class Theme
     public static readonly Color AccentB = C("#22D3EE");
     public static readonly Color AccentC = C("#F472B6");
 
+    /// <summary>The pointer's light: a soft sky blue, like light through glass.</summary>
+    public static readonly Color PointerGlow = C("#5AA9FF");
+    public static readonly Brush PointerStroke = Vertical(C("#F2FFFFFF"), C("#CCBFE0FF"));
+    public static readonly Brush SolidSurface = Vertical(C("#FA171B28"), C("#FA0E1119"));
+
     public static readonly Brush Text = B("#F5F7FC");
     public static readonly Brush Muted = B("#AAB3C5");
     public static readonly Brush Faint = B("#727B90");

@@ -82,6 +82,8 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT lpPoint);
     [DllImport("user32.dll")]
+    public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+    [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
     [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
