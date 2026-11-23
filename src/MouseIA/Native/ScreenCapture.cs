@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
@@ -15,12 +16,67 @@ internal sealed class ScreenShot
     public required double Scale { get; init; }
     /// <summary>Top-level windows, front to back, in pixels relative to the monitor.</summary>
     public required IReadOnlyList<Int32Rect> Windows { get; init; }
-    /// <summary>Cursor position in pixels relative to the monitor.</summary>
+    /// <summary>Cursor position in pixels relative to the monitor (may lie outside it).</summary>
     public required Point Cursor { get; init; }
+
+    public bool HasCursor => Cursor.X >= 0 && Cursor.Y >= 0 && Cursor.X < Bounds.Width && Cursor.Y < Bounds.Height;
+}
+
+internal sealed record MonitorInfo(int Number, string Device, Int32Rect Bounds, bool Primary, IntPtr Handle)
+{
+    public string Label => $"{Number}{(Primary ? " ★" : "")} · {Bounds.Width}×{Bounds.Height}";
 }
 
 internal static class ScreenCapture
 {
+    /// <summary>All monitors, numbered left to right like Windows' display settings usually show them.</summary>
+    public static IReadOnlyList<MonitorInfo> Monitors()
+    {
+        var found = new List<(string Device, Int32Rect Bounds, bool Primary, IntPtr Handle)>();
+        Win32.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr monitor, IntPtr _, ref Win32.RECT _, IntPtr _) =>
+        {
+            var info = new Win32.MONITORINFOEX { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Win32.MONITORINFOEX>(), szDevice = "" };
+            if (Win32.GetMonitorInfoEx(monitor, ref info))
+            {
+                var r = info.rcMonitor;
+                found.Add((info.szDevice, new Int32Rect(r.Left, r.Top, r.Width, r.Height), (info.dwFlags & 1) != 0, monitor));
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found.OrderBy(m => m.Bounds.X).ThenBy(m => m.Bounds.Y)
+            .Select((m, i) => new MonitorInfo(i + 1, m.Device, m.Bounds, m.Primary, m.Handle)).ToList();
+    }
+
+    /// <summary>Monitors the pointer should cover for a setting: "all", "cursor" or a device name.</summary>
+    public static IReadOnlyList<MonitorInfo> MonitorsFor(string mode)
+    {
+        var all = Monitors();
+        if (all.Count == 0) return all;
+        Win32.GetCursorPos(out var cursor);
+        var underCursor = Win32.MonitorFromPoint(cursor, Win32.MONITOR_DEFAULTTONEAREST);
+        if (mode == "all") return all;
+        if (mode != "cursor")
+        {
+            var chosen = all.Where(m => string.Equals(m.Device, mode, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (chosen.Count > 0) return chosen;
+        }
+        return all.Where(m => m.Handle == underCursor).DefaultIfEmpty(all[0]).ToList();
+    }
+
+    public static ScreenShot CaptureMonitor(MonitorInfo monitor)
+    {
+        Win32.GetCursorPos(out var cursor);
+        var bounds = monitor.Bounds;
+        return new ScreenShot
+        {
+            Image = Capture(bounds),
+            Bounds = bounds,
+            Scale = Win32.MonitorScale(monitor.Handle),
+            Windows = TopLevelWindows(bounds),
+            Cursor = new Point(cursor.X - bounds.X, cursor.Y - bounds.Y),
+        };
+    }
+
     public static ScreenShot CaptureMonitorUnderCursor()
     {
         Win32.GetCursorPos(out var cursor);

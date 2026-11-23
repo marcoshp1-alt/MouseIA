@@ -59,10 +59,27 @@ public sealed class AppSettings
     public bool DisableInFullscreen { get; set; } = true;
     public bool TypeToAsk { get; set; } = true;
 
+    // Mouse actions while the pointer is open: ask | translate | translate_speak | copy_text | qr | none
+    public string LeftDragAction { get; set; } = "ask";
+    public string RightDragAction { get; set; } = "translate";
+    public string ScrollAction { get; set; } = "none";
+    /// <summary>Also read aloud the translation laid over the screen.</summary>
+    public bool SpeakOverlayTranslation { get; set; } = false;
+
+    // Monitors: all | cursor | a device name such as \\.\DISPLAY2
+    public string MonitorMode { get; set; } = "all";
+
+    // Updates
+    public bool AutoUpdate { get; set; } = true;
+    public DateTime LastUpdateCheck { get; set; }
+    public string SkippedVersion { get; set; } = "";
+
     // Translator and voice
     public string TranslateTo { get; set; } = "auto"; // language code or "auto" (= interface language)
     public bool SpeakTranslation { get; set; } = false;
     public double VoiceRate { get; set; } = 1.0;
+    /// <summary>"auto" picks the best voice for each language (natural/neural first), or a voice id.</summary>
+    public string VoiceId { get; set; } = "auto";
     public string VoiceInputLanguage { get; set; } = "auto";
 
     // Selection helpers
@@ -164,6 +181,11 @@ public sealed class AppSettings
         GlassOpacity = Math.Clamp(GlassOpacity, 0.3, 1.0);
         if (LocalMode is not ("file" or "server")) LocalMode = "file";
         if (LocalBackend is not ("auto" or "cpu")) LocalBackend = "auto";
+        if (!IsAction(LeftDragAction)) LeftDragAction = "ask";
+        if (!IsAction(RightDragAction)) RightDragAction = "translate";
+        if (!IsAction(ScrollAction)) ScrollAction = "none";
+        if (string.IsNullOrWhiteSpace(MonitorMode)) MonitorMode = "all";
+        if (string.IsNullOrWhiteSpace(VoiceId)) VoiceId = "auto";
         LocalModelFile = (LocalModelFile ?? "").Trim();
         LocalMmproj = (LocalMmproj ?? "").Trim();
         VoiceRate = Math.Clamp(VoiceRate, 0.5, 2.0);
@@ -171,6 +193,10 @@ public sealed class AppSettings
         LocalModel = (LocalModel ?? "").Trim();
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "Alt+Shift+M";
     }
+
+    public static readonly string[] Actions = { "ask", "translate", "translate_speak", "copy_text", "qr", "none" };
+
+    public static bool IsAction(string? value) => Array.IndexOf(Actions, value) >= 0;
 
     private static string SafeUnprotect(ISecretProtector protector, string stored)
     {

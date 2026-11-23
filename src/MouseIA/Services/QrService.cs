@@ -6,7 +6,8 @@ using ZXing;
 
 namespace MouseIA.Services;
 
-internal sealed record CodeResult(string Text, string Format)
+/// <param name="Box">Where the code sits in the decoded image, in its pixels (null if unknown).</param>
+internal sealed record CodeResult(string Text, string Format, System.Windows.Rect? Box = null)
 {
     public bool IsLink => Uri.TryCreate(Text, UriKind.Absolute, out var uri) &&
                           (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
@@ -21,33 +22,48 @@ internal static class QrService
     {
         // Large screenshots decode faster and just as well when scaled down.
         var fitted = ImageUtil.Fit(image, 1600);
-        var pixels = ImageUtil.ToBgra(fitted, out int width, out int height);
         var reader = new BarcodeReaderGeneric
         {
             AutoRotate = true,
         };
         reader.Options.TryHarder = true;
         reader.Options.TryInverted = true;
-        var source = new RGBLuminanceSource(pixels, width, height, RGBLuminanceSource.BitmapFormat.BGRA32);
-        Result[]? results = null;
-        try { results = reader.DecodeMultiple(source); }
-        catch (Exception) { }
-        if (results == null || results.Length == 0)
+        var found = Run(reader, fitted, (double)image.PixelWidth / fitted.PixelWidth);
+        if (found.Count == 0 && Math.Max(image.PixelWidth, image.PixelHeight) < 900)
         {
-            // Small codes in big images: try again enlarged.
-            if (Math.Max(image.PixelWidth, image.PixelHeight) < 900)
-            {
-                var big = ImageUtil.Scale(image, 2);
-                pixels = ImageUtil.ToBgra(big, out width, out height);
-                try { results = reader.DecodeMultiple(new RGBLuminanceSource(pixels, width, height, RGBLuminanceSource.BitmapFormat.BGRA32)); }
-                catch (Exception) { }
-            }
+            // Small codes: try again enlarged.
+            found = Run(reader, ImageUtil.Scale(image, 2), 0.5);
         }
-        if (results == null) return Array.Empty<CodeResult>();
-        return results.Where(r => !string.IsNullOrEmpty(r.Text))
-            .GroupBy(r => r.Text).Select(g => g.First())
-            .Select(r => new CodeResult(r.Text, r.BarcodeFormat.ToString().Replace('_', ' ')))
-            .ToList();
+        return found.GroupBy(r => r.Text).Select(g => g.First()).ToList();
+    }
+
+    private static List<CodeResult> Run(BarcodeReaderGeneric reader, BitmapSource image, double toOriginal)
+    {
+        var list = new List<CodeResult>();
+        var pixels = ImageUtil.ToBgra(image, out int width, out int height);
+        Result[]? results = null;
+        try { results = reader.DecodeMultiple(new RGBLuminanceSource(pixels, width, height, RGBLuminanceSource.BitmapFormat.BGRA32)); }
+        catch (Exception) { }
+        if (results == null) return list;
+        foreach (var r in results)
+        {
+            if (string.IsNullOrEmpty(r.Text)) continue;
+            System.Windows.Rect? box = null;
+            var points = r.ResultPoints?.Where(p => p != null).ToList();
+            if (points is { Count: >= 2 })
+            {
+                double minX = points.Min(p => p.X), maxX = points.Max(p => p.X);
+                double minY = points.Min(p => p.Y), maxY = points.Max(p => p.Y);
+                // QR points are the centres of the corner squares: widen to cover the whole code.
+                double padX = Math.Max(6, (maxX - minX) * 0.2), padY = Math.Max(6, (maxY - minY) * 0.2);
+                if (maxY - minY < 4) padY = Math.Max(padY, 18); // 1D barcodes give a line
+                box = new System.Windows.Rect(
+                    (minX - padX) * toOriginal, (minY - padY) * toOriginal,
+                    (maxX - minX + 2 * padX) * toOriginal, (maxY - minY + 2 * padY) * toOriginal);
+            }
+            list.Add(new CodeResult(r.Text, r.BarcodeFormat.ToString().Replace('_', ' '), box));
+        }
+        return list;
     }
 
     /// <summary>"WIFI:T:WPA;S:name;P:pass;;" -> (name, password).</summary>

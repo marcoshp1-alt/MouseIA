@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -26,7 +27,7 @@ internal sealed class AppController : IDisposable
     private MouseHook? _hook;
     private IntPtr _trayIcon;
     private int _hotkeyId;
-    private OverlayWindow? _overlay;
+    private readonly System.Collections.Generic.List<OverlayWindow> _overlays = new();
     private volatile bool _overlayOpen;
     private volatile bool _resetShake;
     private volatile bool _shakeEnabled;
@@ -34,6 +35,12 @@ internal sealed class AppController : IDisposable
     private DateTime _lastActivation;
 
     public AppSettings Settings { get; private set; }
+
+    /// <summary>A newer release found on GitHub, if any.</summary>
+    public UpdateInfo? AvailableUpdate { get; private set; }
+    public event Action? UpdateStateChanged;
+    private DispatcherTimer? _updateTimer;
+    private bool _installingUpdate;
     public ImageSource? WindowIcon { get; private set; }
 
     public AppController(Application application)
@@ -56,12 +63,18 @@ internal sealed class AppController : IDisposable
         ApplyShake();
         StartupRegistration.Apply(Settings.StartWithWindows);
 
+        StartUpdateChecks();
+
         if (!Settings.FirstRunDone)
         {
             Settings.FirstRunDone = true;
             SaveSettings();
             OpenSettings();
             _tray.Notify("MouseIA", Loc.Format("welcome_toast", Settings.Hotkey));
+        }
+        else if (Environment.GetCommandLineArgs().Contains("--updated"))
+        {
+            _tray.Notify("MouseIA", Loc.Format("updated_toast", Services.Updater.Current));
         }
         else if (!fromStartup)
         {
@@ -173,39 +186,135 @@ internal sealed class AppController : IDisposable
 
     public void ShowPointer()
     {
-        if (_overlay != null)
+        if (_overlays.Count > 0)
         {
             // A second press puts the pointer away.
-            _overlay.CloseOverlay();
+            CloseAllOverlays();
             return;
         }
         if ((DateTime.UtcNow - _lastActivation).TotalMilliseconds < 400) return;
         _lastActivation = DateTime.UtcNow;
         try
         {
-            var shot = ScreenCapture.CaptureMonitorUnderCursor();
-            _overlay = new OverlayWindow(this, shot);
+            // Capture every monitor first, so no overlay appears in another's picture.
+            var shots = ScreenCapture.MonitorsFor(Settings.MonitorMode).Select(ScreenCapture.CaptureMonitor).ToList();
+            if (shots.Count == 0) shots.Add(ScreenCapture.CaptureMonitorUnderCursor());
+            var primary = shots.FirstOrDefault(s => s.HasCursor) ?? shots[0];
             _overlayOpen = true;
-            _overlay.Show();
+            foreach (var shot in shots.OrderBy(s => ReferenceEquals(s, primary)))
+            {
+                var overlay = new OverlayWindow(this, shot, primary: ReferenceEquals(shot, primary));
+                _overlays.Add(overlay);
+                overlay.Show();
+            }
         }
         catch (Exception ex)
         {
             Log.Write("Show pointer failed: " + ex);
-            _overlay = null;
-            _overlayOpen = false;
+            CloseAllOverlays();
+            _overlayOpen = _overlays.Count > 0;
         }
+    }
+
+    public void CloseAllOverlays()
+    {
+        foreach (var overlay in _overlays.ToList()) overlay.CloseSelf();
+    }
+
+    public void CloseOtherOverlays(OverlayWindow keep)
+    {
+        foreach (var overlay in _overlays.Where(o => !ReferenceEquals(o, keep)).ToList()) overlay.CloseSelf();
     }
 
     public void OverlayClosed(OverlayWindow overlay)
     {
-        if (ReferenceEquals(_overlay, overlay))
-        {
-            _overlay = null;
-            _overlayOpen = false;
-        }
+        _overlays.Remove(overlay);
+        if (_overlays.Count > 0) return;
+        _overlayOpen = false;
         _resetShake = true;
         // Screenshots are large; give the memory back promptly.
         GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+    }
+
+    // ---- updates ----
+
+    private void StartUpdateChecks()
+    {
+        _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(6) };
+        _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync(manual: false);
+        _updateTimer.Start();
+        // A little after startup, so the PC isn't busy with it at logon.
+        var first = new DispatcherTimer { Interval = TimeSpan.FromSeconds(45) };
+        first.Tick += (_, _) =>
+        {
+            first.Stop();
+            _ = CheckForUpdatesAsync(manual: false);
+        };
+        first.Start();
+    }
+
+    /// <summary>Asks GitHub for a newer version; installs it on its own when automatic updates are on.</summary>
+    public async System.Threading.Tasks.Task<UpdateInfo?> CheckForUpdatesAsync(bool manual)
+    {
+        if (!manual && !Settings.AutoUpdate) return null;
+        UpdateInfo? info;
+        try
+        {
+            info = await Services.Updater.CheckAsync(System.Threading.CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Update check failed: " + ex.Message);
+            if (manual) throw;
+            return null;
+        }
+        Settings.LastUpdateCheck = DateTime.UtcNow;
+        SaveSettings();
+        AvailableUpdate = info;
+        UpdateStateChanged?.Invoke();
+        if (info == null || manual) return info;
+        if (Settings.AutoUpdate && Services.Updater.CanInstall(info) && info.Tag != Settings.SkippedVersion)
+            InstallUpdateWhenIdle(info);
+        else
+            _tray?.Notify("MouseIA", Loc.Format("update_available_toast", info.Version));
+        return info;
+    }
+
+    private void InstallUpdateWhenIdle(UpdateInfo info)
+    {
+        if (_overlays.Count > 0 || _settingsWindow != null)
+        {
+            // Don't pull the rug while someone is using MouseIA; try again in a few minutes.
+            var later = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+            later.Tick += (_, _) =>
+            {
+                later.Stop();
+                InstallUpdateWhenIdle(info);
+            };
+            later.Start();
+            return;
+        }
+        _ = InstallUpdateAsync(info, null);
+    }
+
+    /// <summary>Downloads and applies an update, then closes so it can replace this copy.</summary>
+    public async System.Threading.Tasks.Task InstallUpdateAsync(UpdateInfo info, IProgress<int>? progress)
+    {
+        if (_installingUpdate) return;
+        _installingUpdate = true;
+        try
+        {
+            _tray?.Notify("MouseIA", Loc.Format("update_installing_toast", info.Version));
+            await Services.Updater.InstallAsync(info, progress, System.Threading.CancellationToken.None);
+            Exit();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Update failed: " + ex);
+            _tray?.Notify("MouseIA", Loc.T("update_failed"));
+            _installingUpdate = false;
+            throw;
+        }
     }
 
     // ---- tray menu ----
@@ -281,7 +390,7 @@ internal sealed class AppController : IDisposable
     public void Exit()
     {
         Services.LocalEngine.Stop();
-        _overlay?.Close();
+        foreach (var overlay in _overlays.ToList()) overlay.Close();
         _settingsWindow?.Close();
         Dispose();
         _application.Shutdown();

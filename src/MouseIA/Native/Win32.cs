@@ -26,7 +26,24 @@ internal static class Win32
         public uint dwFlags;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+    }
+
+    public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT lprcMonitor, IntPtr dwData);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMonitorInfoW")]
+    public static extern bool GetMonitorInfoEx(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+
+        [StructLayout(LayoutKind.Sequential)]
     public struct MSLLHOOKSTRUCT
     {
         public POINT pt;

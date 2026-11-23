@@ -31,6 +31,7 @@ internal sealed class SettingsWindow : Window
     private readonly Dictionary<string, Clickable> _navButtons = new();
     private string _current = "ai";
     private bool _acrylic;
+    private WindowState _lastState = WindowState.Normal;
 
     public SettingsWindow(AppController app, string? startPage = null)
     {
@@ -41,7 +42,9 @@ internal sealed class SettingsWindow : Window
         MinWidth = 720;
         MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        WindowStyle = WindowStyle.None;
+        // A normal window style (its frame hidden by WindowChrome) keeps Windows' own
+        // open, close, minimize and maximize animations.
+        WindowStyle = WindowStyle.SingleBorderWindow;
         ResizeMode = ResizeMode.CanResize;
         Background = Brushes.Transparent;
         FontFamily = Theme.Font;
@@ -71,8 +74,11 @@ internal sealed class SettingsWindow : Window
         BuildUi();
 
         SourceInitialized += (_, _) => ApplyBackdrop();
+        Loaded += (_, _) => AnimateIn();
         StateChanged += (_, _) =>
         {
+            if (WindowState != WindowState.Minimized && _lastState == WindowState.Minimized) AnimateIn();
+            _lastState = WindowState;
             if (_maximize != null) _maximize.Glyph = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
             // A maximized borderless window spills past the screen edge by the resize border.
             _surface.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
@@ -86,6 +92,19 @@ internal sealed class SettingsWindow : Window
                 Apply();
             }
         };
+    }
+
+    /// <summary>The content glides up and fades in, on top of Windows' own window animation.</summary>
+    private void AnimateIn()
+    {
+        if (_surface.Child is not FrameworkElement content) return;
+        var shift = new TranslateTransform(0, 14);
+        content.RenderTransform = shift;
+        content.Opacity = 0;
+        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+        shift.BeginAnimation(TranslateTransform.YProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(320)) { EasingFunction = ease });
+        Ui.Fade(content, 1, 260);
     }
 
     /// <summary>Builds every text again, e.g. after the app language changes.</summary>
@@ -104,6 +123,7 @@ internal sealed class SettingsWindow : Window
             ["activation"] = ActivationPage,
             ["voice"] = VoicePage,
             ["general"] = GeneralPage,
+            ["updates"] = UpdatesPage,
             ["about"] = AboutPage,
         };
         // Fresh containers: the old ones still belong to the previous layout.
@@ -133,6 +153,7 @@ internal sealed class SettingsWindow : Window
         AddNav("activation", Theme.Glyph.Mouse, Loc.T("nav_activation"));
         AddNav("voice", Theme.Glyph.Globe, Loc.T("nav_voice"));
         AddNav("general", Theme.Glyph.Settings, Loc.T("nav_general"));
+        AddNav("updates", "\uE895", Loc.T("nav_updates"));
         AddNav("about", Theme.Glyph.Heart, Loc.T("nav_about"));
 
         var sidebar = new DockPanel { Width = 220, Background = Theme.B("#0AFFFFFF") };
@@ -832,6 +853,15 @@ internal sealed class SettingsWindow : Window
         };
     }
 
+    private static string LanguageName(string code)
+    {
+        if (string.IsNullOrEmpty(code)) return "?";
+        var info = Languages.Find(code) ?? Languages.Find(code.Split('-')[0]);
+        if (info != null) return Loc.IsPortuguese ? info.Portuguese : info.English;
+        try { return new System.Globalization.CultureInfo(code).DisplayName; }
+        catch (Exception) { return code; }
+    }
+
     private static bool LooksMultimodal(string model)
     {
         var m = model.ToLowerInvariant();
@@ -912,6 +942,25 @@ internal sealed class SettingsWindow : Window
             ToggleRow(Loc.T("fullscreen_off"), Loc.T("fullscreen_off_help"), _draft.DisableInFullscreen, v => { _draft.DisableInFullscreen = v; Changed(); })));
         page.Children.Add(Section(
             ToggleRow(Loc.T("type_to_ask"), Loc.T("type_to_ask_help"), _draft.TypeToAsk, v => { _draft.TypeToAsk = v; Changed(); })));
+
+        // What each mouse gesture does while the pointer is open.
+        Picker ActionPicker(string current, Action<string> set)
+        {
+            var items = AppSettings.Actions.Select(a => new Picker.Item(a, Loc.T("action_" + a), Loc.T("action_" + a + "_detail")));
+            var picker = new Picker(items, current, searchable: false) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            picker.Changed += v => { set(v); Changed(); };
+            return picker;
+        }
+        page.Children.Add(Section(
+            Ui.Label(Loc.T("mouse_actions"), 13, Theme.Text, FontWeights.SemiBold),
+            Spacer(2),
+            Ui.Label(Loc.T("mouse_actions_help"), 12, Theme.Muted),
+            Spacer(6),
+            Field(Loc.T("left_drag"), Loc.T("left_drag_help"), ActionPicker(_draft.LeftDragAction, v => _draft.LeftDragAction = v)),
+            Field(Loc.T("right_drag"), Loc.T("right_drag_help"), ActionPicker(_draft.RightDragAction, v => _draft.RightDragAction = v)),
+            Field(Loc.T("scroll_action"), Loc.T("scroll_action_help"), ActionPicker(_draft.ScrollAction, v => _draft.ScrollAction = v)),
+            ToggleRow(Loc.T("speak_overlay"), Loc.T("speak_overlay_help"), _draft.SpeakOverlayTranslation,
+                v => { _draft.SpeakOverlayTranslation = v; Changed(); })));
         return page;
     }
 
@@ -929,9 +978,37 @@ internal sealed class SettingsWindow : Window
         var rate = DarkSlider(0.5, 2.0, _draft.VoiceRate, 0.1);
         rate.ValueChanged += (_, e) => { _draft.VoiceRate = Math.Round(e.NewValue, 1); Changed(); };
 
-        var voices = SpeechService.Voices;
-        var voiceList = string.Join(", ", voices.Select(v => v.Language).Distinct().OrderBy(l => l));
-        var voiceInfo = Ui.Label(voices.Count == 0 ? Loc.T("no_voices") : Loc.Format("voices_installed", voices.Count, voiceList), 12, Theme.Muted);
+        // Voices are read fresh whenever this page opens, so newly installed ones appear by themselves.
+        var voicePicker = new Picker(Array.Empty<Picker.Item>(), _draft.VoiceId) { Width = 420, HorizontalAlignment = HorizontalAlignment.Left };
+        var voiceInfo = Ui.Label("", 12, Theme.Muted);
+        voiceInfo.Margin = new Thickness(0, 8, 0, 0);
+        void LoadVoices()
+        {
+            var voices = SpeechService.AllVoices();
+            var items = new List<Picker.Item> { new("auto", Loc.T("voice_auto"), Loc.T("voice_auto_detail")) };
+            items.AddRange(voices
+                .OrderBy(v => LanguageName(v.Language), StringComparer.CurrentCulture)
+                .ThenByDescending(v => v.Natural)
+                .ThenBy(v => v.Name)
+                .Select(v => new Picker.Item(v.Id, v.Label,
+                    LanguageName(v.Language) + (v.Natural ? " · " + Loc.T("voice_natural") : "") + (v.Sapi ? " · SAPI" : ""))));
+            if (_draft.VoiceId != "auto" && voices.All(v => v.Id != _draft.VoiceId)) _draft.VoiceId = "auto";
+            voicePicker.SetItems(items, _draft.VoiceId);
+            int natural = voices.Count(v => v.Natural);
+            voiceInfo.Text = voices.Count == 0 ? Loc.T("no_voices")
+                : Loc.Format("voices_found", voices.Count, natural, voices.Select(v => v.Language.Split('-')[0]).Distinct().Count());
+        }
+        LoadVoices();
+        voicePicker.Changed += id => { _draft.VoiceId = id; Changed(); };
+        var refresh = new IconButton(Theme.Glyph.Refresh, Loc.T("refresh_voices"), 34, 12) { Margin = new Thickness(8, 0, 0, 0) };
+        refresh.Click += LoadVoices;
+        var voiceRow = new StackPanel { Orientation = Orientation.Horizontal };
+        voiceRow.Children.Add(voicePicker);
+        voiceRow.Children.Add(refresh);
+        var voiceBlock = new StackPanel();
+        voiceBlock.Children.Add(voiceRow);
+        voiceBlock.Children.Add(voiceInfo);
+
         var install = new SecondaryButton(Loc.T("install_voices"), Theme.Glyph.Add);
         install.Click += () => OpenUrl("ms-settings:regionlanguage");
         var speech = new SecondaryButton(Loc.T("speech_settings"), Theme.Glyph.Mic) { Margin = new Thickness(8, 0, 0, 0) };
@@ -939,23 +1016,37 @@ internal sealed class SettingsWindow : Window
         var testVoice = new SecondaryButton(Loc.T("test_voice"), Theme.Glyph.Volume) { Margin = new Thickness(8, 0, 0, 0) };
         testVoice.Click += async () =>
         {
-            var lang = Languages.Resolve(_draft.TranslateTo, Loc.Culture);
-            if (!await SpeechService.SpeakAsync(Loc.T("voice_sample"), Loc.IsPortuguese ? "pt-BR" : "en-US", _draft.VoiceRate))
-                voiceInfo.Text = Loc.Format("no_voice", lang.Display(Loc.IsPortuguese));
+            var chosen = SpeechService.AllVoices().FirstOrDefault(v => v.Id == _draft.VoiceId);
+            var lang = chosen?.Language is { Length: > 0 } l ? l : (Loc.IsPortuguese ? "pt-BR" : "en-US");
+            var sample = lang.StartsWith("pt", StringComparison.OrdinalIgnoreCase) ? "Olá! Eu sou o MouseIA." :
+                lang.StartsWith("en", StringComparison.OrdinalIgnoreCase) ? "Hi! I'm MouseIA." : Loc.T("voice_sample");
+            try
+            {
+                if (!await SpeechService.SpeakAsync(sample, lang, _draft.VoiceRate, _draft.VoiceId))
+                    voiceInfo.Text = Loc.Format("no_voice", LanguageName(lang));
+            }
+            catch (Exception ex) { voiceInfo.Text = ex.Message; }
         };
         var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
         buttons.Children.Add(install);
         buttons.Children.Add(speech);
         buttons.Children.Add(testVoice);
+        var naturalHelp = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        naturalHelp.Children.Add(Ui.Label(Loc.T("natural_voices_help"), 12, Theme.Muted));
+        var adapter = Link(Loc.T("natural_voices_link"), "https://github.com/gexgd0419/NaturalVoiceSAPIAdapter");
+        adapter.Margin = new Thickness(0, 4, 0, 0);
+        naturalHelp.Children.Add(adapter);
 
         page.Children.Add(Section(
             Field(Loc.T("translate_to"), Loc.T("translate_to_help"), target),
             ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => { _draft.SpeakTranslation = v; Changed(); })));
         page.Children.Add(Section(
-            Field(Loc.T("mic_language"), Loc.T("mic_language_help"), mic),
+            Field(Loc.T("voice"), Loc.T("voice_help"), voiceBlock),
             Field(Loc.T("voice_rate"), null, rate),
-            voiceInfo,
-            buttons));
+            buttons,
+            naturalHelp));
+        page.Children.Add(Section(
+            Field(Loc.T("mic_language"), Loc.T("mic_language_help"), mic)));
         return page;
     }
 
@@ -1009,6 +1100,19 @@ internal sealed class SettingsWindow : Window
             }),
             opacityField));
         if (!_draft.GlassEffect) opacityField.Opacity = 0.45;
+        // Monitors the pointer covers.
+        var monitors = ScreenCapture.Monitors();
+        var monitorItems = new List<Picker.Item>
+        {
+            new("all", Loc.T("monitors_all"), Loc.Format("monitors_all_detail", monitors.Count)),
+            new("cursor", Loc.T("monitors_cursor"), Loc.T("monitors_cursor_detail")),
+        };
+        monitorItems.AddRange(monitors.Select(m => new Picker.Item(m.Device, Loc.Format("monitor_n", m.Number) + (m.Primary ? " · " + Loc.T("primary") : ""),
+            $"{m.Bounds.Width}×{m.Bounds.Height}")));
+        var monitorPicker = new Picker(monitorItems, _draft.MonitorMode, searchable: false) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        monitorPicker.Changed += v => { _draft.MonitorMode = v; Changed(); };
+        page.Children.Add(Section(Field(Loc.T("monitors"), Loc.T("monitors_help"), monitorPicker)));
+
         page.Children.Add(Section(
             ToggleRow(Loc.T("auto_ocr"), Loc.T("auto_ocr_help"), _draft.AutoOcr, v => { _draft.AutoOcr = v; Changed(); }),
             ToggleRow(Loc.T("auto_qr"), Loc.T("auto_qr_help"), _draft.AutoQr, v => { _draft.AutoQr = v; Changed(); })));
@@ -1024,6 +1128,89 @@ internal sealed class SettingsWindow : Window
     {
         try { return OcrService.LanguagesSummary(); }
         catch (Exception) { return "—"; }
+    }
+
+    private FrameworkElement UpdatesPage()
+    {
+        var page = Page(Loc.T("nav_updates"), Loc.Format("updates_subtitle", Updater.Current));
+        var status = Ui.Label("", 13, Theme.Muted);
+        var notes = new TextBox
+        {
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = Theme.Muted,
+            FontFamily = Theme.Font,
+            FontSize = 12.5,
+            MaxHeight = 220,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, 10, 0, 0),
+        };
+        var install = new PrimaryButton(Loc.T("update_install"), "\uE896") { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 10, 0) };
+        var check = new SecondaryButton(Loc.T("update_check"), Theme.Glyph.Refresh);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
+        buttons.Children.Add(install);
+        buttons.Children.Add(check);
+
+        void Show(UpdateInfo? info, bool checkedNow)
+        {
+            if (info == null)
+            {
+                status.Foreground = checkedNow ? Theme.Success : Theme.Muted;
+                status.Text = checkedNow ? Loc.T("update_none") : (_app.Settings.LastUpdateCheck == default
+                    ? Loc.T("update_never")
+                    : Loc.Format("update_last_check", _app.Settings.LastUpdateCheck.ToLocalTime().ToString("g")));
+                install.Visibility = Visibility.Collapsed;
+                notes.Visibility = Visibility.Collapsed;
+                return;
+            }
+            status.Foreground = Theme.Text;
+            status.Text = Loc.Format("update_found", info.Version);
+            install.Visibility = Updater.CanInstall(info) ? Visibility.Visible : Visibility.Collapsed;
+            notes.Text = info.Notes;
+            notes.Visibility = info.Notes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        Show(_app.AvailableUpdate, false);
+
+        check.Click += async () =>
+        {
+            check.IsEnabled = false;
+            status.Foreground = Theme.Muted;
+            status.Text = Loc.T("update_checking");
+            try { Show(await _app.CheckForUpdatesAsync(manual: true), true); }
+            catch (Exception)
+            {
+                status.Foreground = Theme.Danger;
+                status.Text = Loc.T("update_check_failed");
+            }
+            check.IsEnabled = true;
+        };
+        install.Click += async () =>
+        {
+            var info = _app.AvailableUpdate;
+            if (info == null) return;
+            install.IsEnabled = false;
+            check.IsEnabled = false;
+            var progress = new Progress<int>(p => status.Text = Loc.Format("update_downloading", p));
+            try { await _app.InstallUpdateAsync(info, progress); }
+            catch (Exception)
+            {
+                status.Foreground = Theme.Danger;
+                status.Text = Loc.T("update_failed");
+                install.IsEnabled = true;
+                check.IsEnabled = true;
+            }
+        };
+
+        var releases = Link(Loc.T("update_all_versions"), UpdateInfo.ReleasesPage);
+        releases.Margin = new Thickness(0, 12, 0, 0);
+        page.Children.Add(Section(status, notes, buttons, releases));
+        page.Children.Add(Section(
+            ToggleRow(Loc.T("auto_update"), Loc.T(Updater.IsInstalled ? "auto_update_help" : "auto_update_help_portable"),
+                _draft.AutoUpdate, v => { _draft.AutoUpdate = v; Changed(); })));
+        return page;
     }
 
     private FrameworkElement AboutPage()

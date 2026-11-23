@@ -135,6 +135,21 @@ static class P
         var n = new AppSettings { GlassOpacity = 5, LocalMode = "zzz", LocalBackend = "x" }; n.Normalize();
         Check(n.GlassOpacity == 1.0 && n.LocalMode == "file" && n.LocalBackend == "auto", "normalize new options");
 
+        // Updates
+        var rel = "{\"tag_name\":\"v1.2.0\",\"draft\":false,\"prerelease\":false,\"body\":\"Novidades\",\"html_url\":\"https://github.com/x/r/releases/tag/v1.2.0\",\"assets\":[" +
+                  "{\"name\":\"MouseIA-Setup-1.2.0.exe\",\"browser_download_url\":\"https://x/setup.exe\"}," +
+                  "{\"name\":\"MouseIA-Portable-1.2.0.exe\",\"browser_download_url\":\"https://x/portable.exe\"}]}";
+        var up = UpdateInfo.Parse(rel)!;
+        Check(up.Version == new Version(1, 2, 0) && up.SetupUrl == "https://x/setup.exe" && up.PortableUrl == "https://x/portable.exe" && up.Notes == "Novidades", "parse release");
+        Check(up.IsNewerThan(new Version(1, 1, 1)) && !up.IsNewerThan(new Version(1, 2, 0)) && !up.IsNewerThan(new Version(1, 2, 0, 0)), "version compare");
+        Check(UpdateInfo.ParseVersion("v2") == new Version(2, 0, 0) && UpdateInfo.ParseVersion("1.3.1-beta") == new Version(1, 3, 1) && UpdateInfo.ParseVersion("latest") == null, "parse tags");
+        Check(UpdateInfo.Parse(rel.Replace("\"prerelease\":false", "\"prerelease\":true")) == null, "skip prerelease");
+        // New settings defaults
+        var a = new AppSettings();
+        Check(a.LeftDragAction == "ask" && a.RightDragAction == "translate" && a.ScrollAction == "none" && a.MonitorMode == "all" && a.AutoUpdate && a.VoiceId == "auto", "action/monitor/update defaults");
+        var bad = new AppSettings { LeftDragAction = "x", ScrollAction = "" }; bad.Normalize();
+        Check(bad.LeftDragAction == "ask" && bad.ScrollAction == "none", "normalize actions");
+
         Console.WriteLine(failed == 0 ? "ALL PASSED" : failed + " FAILED");
         return failed == 0 ? 0 : 1;
     }

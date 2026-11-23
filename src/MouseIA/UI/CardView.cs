@@ -996,7 +996,7 @@ internal sealed class CardView : Grid
         }
         try
         {
-            bool ok = await SpeechService.SpeakAsync(text, languageCode, _settings.VoiceRate);
+            bool ok = await SpeechService.SpeakAsync(text, languageCode, _settings.VoiceRate, _settings.VoiceId);
             if (ok) from?.MarkSpeaking();
             if (!ok)
             {

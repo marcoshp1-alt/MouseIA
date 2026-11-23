@@ -8,15 +8,18 @@ Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e 
 
 ## Como usar
 
-1. **Balance o mouse** de um lado para o outro, ou aperte **Alt+Shift+M**. Uma onda de luz sai do cursor e ele vira uma estrela brilhante.
-2. **Passe o mouse** sobre um parágrafo, botão, imagem ou janela: ele se ilumina. **Clique** para escolher, ou **arraste** para pegar uma área.
+1. **Balance o mouse** de um lado para o outro, ou aperte **Alt+Shift+M**. Uma onda de luz sai do cursor, que ganha um brilho azul. Funciona em todos os monitores (ou só no que você escolher).
+2. **Passe o mouse** sobre um parágrafo, botão, imagem ou janela: ele se ilumina.
+   - **Botão esquerdo** (clicar ou arrastar): abre o cartão para perguntar.
+   - **Botão direito arrastando**: traduz a área ali mesmo, por cima da tela, sem abrir o cartão.
+   - As ações de cada botão (e da rolagem) podem ser trocadas em Configurações > Ativação.
 3. No cartão que aparece, **pergunte o que quiser** ou use os botões:
 
 | Botão | O que faz |
 |---|---|
 | 🌐 **Traduzir → idioma** | Traduz o texto da seleção para mais de 110 idiomas |
 | 📋 **Copiar texto** | Reconhece o texto da imagem (offline, OCR do Windows) e copia |
-| ▦ **QR Code** | Lê QR Codes e códigos de barras; abre links e mostra senhas de Wi-Fi |
+| ▦ **QR Code** | Lê QR Codes e códigos de barras e põe o botão **Abrir link** em cima do próprio código |
 | 🔊 **Ouvir tradução** | Traduz a seleção e lê em voz alta no idioma escolhido |
 | 📁 **Arquivo** | Imagens, PDF, vídeos, Word, PowerPoint, Excel e textos (ou arraste para o cartão) |
 
@@ -49,6 +52,9 @@ Copiar texto e ler QR Code funcionam **sem IA e sem internet**.
 
 Baixe o `MouseIA-Setup.exe` na página de **Releases** e instale. Não precisa ser administrador.
 Também há a versão **portátil** (`MouseIA-Portable.exe`), que roda sem instalar.
+
+**Atualizações automáticas:** o MouseIA confere o GitHub e se atualiza sozinho (Configurações > Atualizações).
+Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.2.0`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
 
 Requer Windows 10 (versão 2004) ou mais novo, 64 bits.
 

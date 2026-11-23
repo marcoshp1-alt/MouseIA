@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MouseIA.Core;
 using MouseIA.Native;
@@ -32,15 +33,15 @@ internal sealed class OverlayWindow : Window
     private readonly Border _frame;
     private readonly Border _hint;
     private readonly Canvas _pointer;
-    private readonly List<FrameworkElement> _trail = new();
     private readonly DispatcherTimer _idle;
     private ElementProbe? _probe;
     private CardView? _card;
     private Mode _mode = Mode.Pointing;
     private Point _dragStart;
-    private Point _lastTrail;
     private bool _mouseDown;
+    private bool _rightDown;
     private bool _dragging;
+    private readonly List<FrameworkElement> _layers = new();
     private bool _hintFollows = true;
     private Rect _hover = Rect.Empty;
     private Rect _selection = Rect.Empty;
@@ -53,8 +54,12 @@ internal sealed class OverlayWindow : Window
     public double ScreenWidthDip => Shot.Bounds.Width / _scale;
     public double ScreenHeightDip => Shot.Bounds.Height / _scale;
 
-    public OverlayWindow(AppController app, ScreenShot shot)
+    private readonly bool _primary;
+
+    /// <param name="primary">The overlay that takes the keyboard and shows the opening ripple.</param>
+    public OverlayWindow(AppController app, ScreenShot shot, bool primary)
     {
+        _primary = primary;
         _app = app;
         _settings = app.Settings;
         Shot = shot;
@@ -108,6 +113,16 @@ internal sealed class OverlayWindow : Window
         // WPF applies its own suggested size after a DPI change; put the window back afterwards.
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, PlaceOnMonitor);
         Drop += (_, e) => OnFileDrop(e);
+        MouseEnter += (_, _) =>
+        {
+            if (_mode is Mode.Pointing or Mode.Adding)
+            {
+                SetPointerVisible(true);
+                // The keyboard follows the pointer between monitors.
+                if (!IsActive && !_closing) Activate();
+            }
+        };
+        MouseLeave += (_, _) => { if (_mode is Mode.Pointing or Mode.Adding) _pointer.Visibility = Visibility.Collapsed; };
     }
 
     private IntPtr Handle => new WindowInteropHelper(this).Handle;
@@ -128,11 +143,22 @@ internal sealed class OverlayWindow : Window
     private void OnLoaded()
     {
         PlaceOnMonitor();
-        Win32.ForceForeground(Handle);
-        Activate();
-        Focus();
-        Keyboard.Focus(this);
         _probe = new ElementProbe(Handle, (point, rect) => Dispatcher.BeginInvoke(() => OnProbed(point, rect)));
+        if (_primary)
+        {
+            Win32.ForceForeground(Handle);
+            Activate();
+            Focus();
+            Keyboard.Focus(this);
+        }
+        if (!Shot.HasCursor)
+        {
+            // Another monitor has the pointer: wait quietly until it comes here.
+            _pointer.Visibility = Visibility.Collapsed;
+            _hint.Visibility = Visibility.Collapsed;
+            _idle.Start();
+            return;
+        }
         var cursor = ToDip(Shot.Cursor);
         MovePointer(cursor);
         Ripple(cursor);
@@ -155,42 +181,37 @@ internal sealed class OverlayWindow : Window
 
     // ---- the star pointer ----
 
-    private static readonly Geometry Star = Geometry.Parse(
-        "M 0,-11 C 1.2,-2.4 2.4,-1.2 11,0 C 2.4,1.2 1.2,2.4 0,11 C -1.2,2.4 -2.4,1.2 -11,0 C -2.4,-1.2 -1.2,-2.4 0,-11 Z");
-
-    private static Path StarShape(double size, double opacity)
-    {
-        var star = new Path
-        {
-            Data = Star,
-            Fill = Brushes.White,
-            Stretch = Stretch.Uniform,
-            Width = size,
-            Height = size,
-            Opacity = opacity,
-            IsHitTestVisible = false,
-        };
-        return star;
-    }
+    /// <summary>A classic arrow pointer; its tip is the hot spot at (0, 0).</summary>
+    private static readonly Geometry Arrow = Geometry.Parse(
+        "M 0,0 L 0,21 L 5.2,16.2 L 8.6,24 L 12,22.6 L 8.7,14.9 L 15.6,14.9 Z");
 
     private Canvas BuildPointer()
     {
-        var canvas = new Canvas { IsHitTestVisible = false, Effect = Theme.Glow(Theme.PointerGlow, 16, 1) };
-        var main = StarShape(24, 1);
-        Canvas.SetLeft(main, -12);
-        Canvas.SetTop(main, -12);
-        var small = StarShape(10, 0.9);
-        Canvas.SetLeft(small, 9);
-        Canvas.SetTop(small, -17);
-        canvas.Children.Add(main);
-        canvas.Children.Add(small);
-        // A gentle twinkle.
-        var twinkle = new DoubleAnimation(0.45, 1, TimeSpan.FromMilliseconds(700))
+        var canvas = new Canvas { IsHitTestVisible = false };
+        var halo = new Path
+        {
+            Data = Arrow,
+            Fill = Theme.B("#995AA9FF"),
+            Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 14 },
+            RenderTransform = new ScaleTransform(1.15, 1.15),
+        };
+        var arrow = new Path
+        {
+            Data = Arrow,
+            Fill = Brushes.White,
+            Stroke = Theme.B("#FF1B2A44"),
+            StrokeThickness = 1.2,
+            StrokeLineJoin = PenLineJoin.Round,
+            Effect = Theme.Glow(Theme.PointerGlow, 18, 1),
+        };
+        canvas.Children.Add(halo);
+        canvas.Children.Add(arrow);
+        // The glow breathes gently.
+        halo.BeginAnimation(OpacityProperty, new DoubleAnimation(0.55, 1, TimeSpan.FromMilliseconds(900))
         {
             AutoReverse = true,
             RepeatBehavior = RepeatBehavior.Forever,
-        };
-        small.BeginAnimation(OpacityProperty, twinkle);
+        });
         return canvas;
     }
 
@@ -199,29 +220,6 @@ internal sealed class OverlayWindow : Window
         Canvas.SetLeft(_pointer, point.X);
         Canvas.SetTop(_pointer, point.Y);
         if (_hintFollows && _hint.Opacity > 0) PlaceHint(point, animate: false);
-        // Leave a short trail of sparkles when moving quickly.
-        if ((point - _lastTrail).Length > 26)
-        {
-            _lastTrail = point;
-            SpawnSparkle(point);
-        }
-    }
-
-    private void SpawnSparkle(Point point)
-    {
-        if (_trail.Count > 14) return;
-        var size = 5 + Random.Shared.NextDouble() * 6;
-        var sparkle = StarShape(size, 0.9);
-        sparkle.Effect = Theme.Glow(Theme.PointerGlow, 8, 1);
-        Canvas.SetLeft(sparkle, point.X - size / 2 + Random.Shared.Next(-8, 9));
-        Canvas.SetTop(sparkle, point.Y - size / 2 + Random.Shared.Next(-8, 9));
-        _root.Children.Insert(_root.Children.IndexOf(_pointer), sparkle);
-        _trail.Add(sparkle);
-        Ui.Fade(sparkle, 0, 520, () =>
-        {
-            _root.Children.Remove(sparkle);
-            _trail.Remove(sparkle);
-        });
     }
 
     private void SetPointerVisible(bool visible)
@@ -421,7 +419,7 @@ internal sealed class OverlayWindow : Window
         {
             case Mode.Pointing:
             case Mode.Adding:
-                if (_mouseDown && !_dragging && (Math.Abs(point.X - _dragStart.X) > 5 || Math.Abs(point.Y - _dragStart.Y) > 5))
+                if ((_mouseDown || _rightDown) && !_dragging && (Math.Abs(point.X - _dragStart.X) > 5 || Math.Abs(point.Y - _dragStart.Y) > 5))
                 {
                     if (_mode == Mode.Pointing) _mode = Mode.Dragging;
                     _dragging = true;
@@ -466,16 +464,250 @@ internal sealed class OverlayWindow : Window
         }
         _dragging = false;
         if (_mode == Mode.Dragging) _mode = Mode.Pointing;
-        Select(chosen);
+        if (_mode == Mode.Adding) Select(chosen);
+        else RunAction(_settings.LeftDragAction, chosen);
+    }
+
+    /// <summary>Does what the user set for a mouse gesture on an area of the screen.</summary>
+    private void RunAction(string action, Rect area)
+    {
+        area.Intersect(new Rect(0, 0, ScreenWidthDip, ScreenHeightDip));
+        if (area.IsEmpty || area.Width < 2 || area.Height < 2) return;
+        switch (action)
+        {
+            case "ask":
+                Select(area);
+                break;
+            case "translate":
+            case "translate_speak":
+                TranslateHere(area, action == "translate_speak" || _settings.SpeakOverlayTranslation);
+                break;
+            case "copy_text":
+                _ = CopyTextHereAsync(area);
+                break;
+            case "qr":
+                _ = ShowCodesAsync(Crop(area), area, announceEmpty: true);
+                break;
+        }
+    }
+
+    private BitmapSource Crop(Rect areaDip) => ImageUtil.Crop(Shot.Image, new Int32Rect(
+        (int)Math.Round(areaDip.X * _scale), (int)Math.Round(areaDip.Y * _scale),
+        (int)Math.Round(areaDip.Width * _scale), (int)Math.Round(areaDip.Height * _scale)));
+
+    private void TranslateHere(Rect area, bool speak)
+    {
+        _frame.Visibility = Visibility.Collapsed;
+        var layer = new TranslationLayer(this, _settings, Crop(area), area, speak);
+        _layers.Add(layer);
+        _root.Children.Insert(_root.Children.IndexOf(_hint), layer);
+    }
+
+    private async System.Threading.Tasks.Task CopyTextHereAsync(Rect area)
+    {
+        var image = Crop(area);
+        string text;
+        try { text = await System.Threading.Tasks.Task.Run(() => OcrService.RecognizeAsync(image)); }
+        catch (Exception) { text = ""; }
+        if (text.Length == 0)
+        {
+            Toast(area, Loc.T("no_text_found"));
+            return;
+        }
+        Clipboard2.SetText(text);
+        Toast(area, Loc.T("text_copied"));
+    }
+
+    /// <summary>A small glass note that appears over an area and fades away.</summary>
+    private void Toast(Rect area, string message)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(Ui.Icon(Theme.Glyph.Check, 12, Brushes.White));
+        var label = Ui.Label(message, 12.5, Brushes.White);
+        label.Margin = new Thickness(8, 0, 0, 1);
+        label.TextWrapping = TextWrapping.NoWrap;
+        row.Children.Add(label);
+        var toast = new Border
+        {
+            Background = Theme.B("#D8162030"),
+            BorderBrush = Theme.B("#88CFE6FF"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(12, 6, 14, 7),
+            Child = row,
+            Effect = Theme.Glow(Theme.PointerGlow, 18, 0.7),
+            IsHitTestVisible = false,
+        };
+        toast.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(toast, Math.Clamp(area.X + (area.Width - toast.DesiredSize.Width) / 2, 8, ScreenWidthDip - toast.DesiredSize.Width - 8));
+        Canvas.SetTop(toast, Math.Clamp(area.Y + (area.Height - toast.DesiredSize.Height) / 2, 8, ScreenHeightDip - toast.DesiredSize.Height - 8));
+        _root.Children.Add(toast);
+        Ui.PopIn(toast, 0.9);
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.6) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            Ui.Fade(toast, 0, 300, () => _root.Children.Remove(toast));
+        };
+        timer.Start();
+    }
+
+    // ---- codes on screen ----
+
+    /// <summary>Puts an "open link" button right on top of each code found in the area (like circle to search).</summary>
+    internal async System.Threading.Tasks.Task ShowCodesAsync(BitmapSource image, Rect area, bool announceEmpty,
+        System.Threading.Tasks.Task<IReadOnlyList<CodeResult>>? pending = null)
+    {
+        IReadOnlyList<CodeResult> codes;
+        try { codes = await (pending ?? System.Threading.Tasks.Task.Run(() => QrService.Decode(image))); }
+        catch (Exception) { codes = Array.Empty<CodeResult>(); }
+        if (_closing) return;
+        if (codes.Count == 0)
+        {
+            if (announceEmpty) Toast(area, Loc.T("no_code_found"));
+            return;
+        }
+        double toDip = area.Width / Math.Max(1, image.PixelWidth);
+        foreach (var code in codes)
+        {
+            var box = code.Box is { } b
+                ? new Rect(area.X + b.X * toDip, area.Y + b.Y * toDip, b.Width * toDip, b.Height * toDip)
+                : area;
+            AddCodeChip(code, box);
+        }
+    }
+
+    private void AddCodeChip(CodeResult code, Rect box)
+    {
+        // A glowing outline around the code itself.
+        var ring = new Border
+        {
+            Width = Math.Max(24, box.Width),
+            Height = Math.Max(24, box.Height),
+            CornerRadius = new CornerRadius(10),
+            BorderBrush = Theme.PointerStroke,
+            BorderThickness = new Thickness(2),
+            Effect = Theme.Glow(Theme.PointerGlow, 20, 0.9),
+            IsHitTestVisible = false,
+        };
+        Canvas.SetLeft(ring, box.X);
+        Canvas.SetTop(ring, box.Y);
+
+        string glyph, label;
+        Action action;
+        if (code.IsLink)
+        {
+            glyph = Theme.Glyph.Link;
+            var host = Uri.TryCreate(code.Text, UriKind.Absolute, out var uri) ? uri.Host.Replace("www.", "") : code.Text;
+            label = Loc.Format("open_link_to", host);
+            action = () => { OpenLink(code.Text); };
+        }
+        else if (QrService.ParseWifi(code.Text) is { } wifi)
+        {
+            glyph = Theme.Glyph.Wifi;
+            label = Loc.Format("copy_wifi_password", wifi.Ssid);
+            action = () => { Clipboard2.SetText(wifi.Password); Toast(box, Loc.T("copied")); };
+        }
+        else
+        {
+            glyph = Theme.Glyph.Copy;
+            label = Loc.Format("copy_code_text", code.Text.Length > 28 ? code.Text[..28] + "…" : code.Text);
+            action = () => { Clipboard2.SetText(code.Text); Toast(box, Loc.T("copied")); };
+        }
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(Ui.Icon(glyph, 13, Brushes.White));
+        var text = Ui.Label(label, 13, Brushes.White, FontWeights.SemiBold);
+        text.TextWrapping = TextWrapping.NoWrap;
+        text.Margin = new Thickness(8, 0, 0, 1);
+        row.Children.Add(text);
+        var chip = new Clickable
+        {
+            Height = 36,
+            CornerRadius = new CornerRadius(18),
+            Padding = new Thickness(14, 0, 16, 0),
+            NormalBrush = Theme.B("#E61A2438"),
+            HoverBrush = Theme.B("#FF24324D"),
+            BorderBrush = Theme.B("#AACFE6FF"),
+            BorderThickness = new Thickness(1),
+            Effect = Theme.Glow(Theme.PointerGlow, 22, 0.9),
+            Child = row,
+            Cursor = Cursors.Hand,
+        };
+        chip.Click += action;
+        chip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double x = box.X + (box.Width - chip.DesiredSize.Width) / 2;
+        double y = box.Y + (box.Height - chip.DesiredSize.Height) / 2;
+        Canvas.SetLeft(chip, Math.Clamp(x, 8, ScreenWidthDip - chip.DesiredSize.Width - 8));
+        Canvas.SetTop(chip, Math.Clamp(y, 8, ScreenHeightDip - chip.DesiredSize.Height - 8));
+        int at = _card != null ? _root.Children.IndexOf(_card) : _root.Children.IndexOf(_hint);
+        _root.Children.Insert(at, ring);
+        _root.Children.Insert(at + 1, chip);
+        _layers.Add(ring);
+        _layers.Add(chip);
+        Ui.PopIn(chip, 0.85);
+        // While the pointer is out, the chip needs the normal cursor.
+        chip.MouseEnter += (_, _) => { if (_pointer.Visibility == Visibility.Visible) _pointer.Opacity = 0; Cursor = Cursors.Hand; };
+        chip.MouseLeave += (_, _) => { _pointer.Opacity = 1; Cursor = _pointer.Visibility == Visibility.Visible ? Cursors.None : Cursors.Arrow; };
+    }
+
+    private void OpenLink(string url)
+    {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex) { Log.Write($"Open {url}: {ex.Message}"); }
+        CloseOverlay();
+    }
+
+    private void ClearLayers()
+    {
+        foreach (var layer in _layers)
+        {
+            if (layer is TranslationLayer t) t.Cancel();
+            _root.Children.Remove(layer);
+        }
+        _layers.Clear();
+    }
+
+    protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonDown(e);
+        if (_mode != Mode.Pointing || e.Handled) return;
+        _rightDown = true;
+        _dragging = false;
+        _dragStart = e.GetPosition(_root);
+        CaptureMouse();
+        _hintFollows = false;
+        Ui.Fade(_hint, 0, 120);
     }
 
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonUp(e);
+        if (_rightDown)
+        {
+            _rightDown = false;
+            ReleaseMouseCapture();
+            bool dragged = _dragging;
+            _dragging = false;
+            if (_mode == Mode.Dragging) _mode = Mode.Pointing;
+            if (dragged)
+            {
+                var area = Normalize(_dragStart, e.GetPosition(_root));
+                if (area.Width >= 8 && area.Height >= 8) RunAction(_settings.RightDragAction, area);
+                return;
+            }
+        }
         if (e.Handled) return;
         if (_mode == Mode.Adding) { BackToCard(); return; }
         if (_card != null && _card.IsMouseOver) return;
         CloseOverlay();
+    }
+
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        if (_mode != Mode.Pointing || _settings.ScrollAction == "none" || _hover.IsEmpty) return;
+        e.Handled = true;
+        RunAction(_settings.ScrollAction, _hover);
     }
 
     private void Select(Rect rectDip)
@@ -494,15 +726,20 @@ internal sealed class OverlayWindow : Window
         {
             _card.AddAttachment(attachment);
             BackToCard();
+            if (_settings.AutoQr && attachment.Codes != null)
+                _ = ShowCodesAsync(image, rectDip, announceEmpty: false, attachment.Codes);
             return;
         }
         OpenCard(rectDip, attachment, null);
+        if (_settings.AutoQr && attachment.Codes != null)
+            _ = ShowCodesAsync(image, rectDip, announceEmpty: false, attachment.Codes);
     }
 
     // ---- card ----
 
     private void OpenCard(Rect anchor, Attachment? attachment, string? typed)
     {
+        _app.CloseOtherOverlays(this);
         _mode = Mode.Card;
         _idle.Stop();
         SetPointerVisible(false);
@@ -634,13 +871,18 @@ internal sealed class OverlayWindow : Window
         check.Start();
     }
 
-    internal void CloseOverlay()
+    /// <summary>Puts the pointer away on every monitor.</summary>
+    internal void CloseOverlay() => _app.CloseAllOverlays();
+
+    /// <summary>Closes just this monitor's layer.</summary>
+    internal void CloseSelf()
     {
         if (_closing) return;
         _closing = true;
         _idle.Stop();
         _probe?.Dispose();
         _card?.CancelAll();
+        foreach (var layer in _layers) if (layer is TranslationLayer t) t.Cancel();
         Ui.Fade(_root, 0, 120, Close);
     }
 

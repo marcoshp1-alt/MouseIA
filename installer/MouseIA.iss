@@ -1,7 +1,7 @@
 ; MouseIA installer (Inno Setup 6). Installs per user: no administrator rights needed.
 #define AppName "MouseIA"
 #ifndef AppVersion
-  #define AppVersion "1.1.1"
+  #define AppVersion "1.2.0"
 #endif
 
 [Setup]
@@ -52,6 +52,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\MouseIA.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; Automatic updates install silently: open MouseIA again afterwards.
+Filename: "{app}\MouseIA.exe"; Parameters: "--updated"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM MouseIA.exe /F"; Flags: runhidden; RunOnceId: "StopMouseIA"
