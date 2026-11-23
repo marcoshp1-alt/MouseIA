@@ -181,8 +181,12 @@ public static class Loc
         ["engine_llama_ready"] = ("llama.cpp instalado e pronto.", "llama.cpp installed and ready."),
         ["engine_llama_missing"] = ("llama.cpp será baixado automaticamente no primeiro uso (cerca de 40 MB).", "llama.cpp will download automatically on first use (about 40 MB)."),
         ["engine_litert_found"] = ("LiteRT-LM encontrado.", "LiteRT-LM found."),
-        ["engine_litert_missing"] = ("Para arquivos .litertlm é preciso o LiteRT-LM. Instale o Python e rode: pip install --upgrade litert-lm", "For .litertlm files you need LiteRT-LM. Install Python and run: pip install --upgrade litert-lm"),
-        ["copy_install_command"] = ("Copiar comando", "Copy command"),
+        ["engine_litert_missing"] = ("O LiteRT-LM será instalado automaticamente no primeiro uso, numa pasta só do MouseIA (uma vez só, cerca de 150 MB com o Python). Não mexe no seu sistema.", "LiteRT-LM installs automatically on first use, in a folder of MouseIA's own (once, about 150 MB with Python). It doesn't touch your system."),
+        ["install_now"] = ("Instalar agora", "Install now"),
+        ["litert_downloading"] = ("Baixando o instalador… {0}", "Downloading the installer… {0}"),
+        ["litert_installing"] = ("Instalando o LiteRT-LM (pode levar alguns minutos)…", "Installing LiteRT-LM (may take a few minutes)…"),
+        ["litert_install_failed"] = ("Não consegui instalar o LiteRT-LM. Verifique a internet e tente de novo.", "Couldn't install LiteRT-LM. Check the internet and try again."),
+        ["litert_install_failed_detail"] = ("Não consegui instalar o LiteRT-LM. {0}", "Couldn't install LiteRT-LM. {0}"),
         ["backend"] = ("Processamento", "Processing"),
         ["backend_help"] = ("GPU é bem mais rápido. Se a placa de vídeo não funcionar, o MouseIA usa o processador sozinho.", "GPU is much faster. If the graphics card doesn't work, MouseIA falls back to the processor."),
         ["backend_gpu"] = ("Placa de vídeo (GPU)", "Graphics card (GPU)"),
@@ -198,7 +202,6 @@ public static class Loc
         ["engine_importing"] = ("Preparando o modelo LiteRT-LM…", "Preparing the LiteRT-LM model…"),
         ["engine_failed"] = ("O modelo não iniciou. {0}", "The model didn't start. {0}"),
         ["engine_no_download"] = ("Não consegui baixar o llama.cpp. Verifique a internet e tente de novo.", "Couldn't download llama.cpp. Check the internet and try again."),
-        ["engine_no_litert"] = ("LiteRT-LM não encontrado. Instale com: pip install --upgrade litert-lm", "LiteRT-LM not found. Install it with: pip install --upgrade litert-lm"),
 
         // Settings shell
         ["settings_title"] = ("Configurações do MouseIA", "MouseIA settings"),

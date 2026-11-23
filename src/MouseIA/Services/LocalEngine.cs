@@ -74,10 +74,14 @@ internal static class LocalEngine
         return Directory.EnumerateFiles(folder, "llama-server.exe", SearchOption.AllDirectories).FirstOrDefault();
     }
 
+    private static string LiteRtRoot => Path.Combine(EnginesFolder, "litert");
+    private static string LiteRtBin => Path.Combine(LiteRtRoot, "bin");
+
     public static string? FindLiteRtCli()
     {
         var names = new[] { "litert-lm.exe", "litert-lm.cmd", "litert-lm" };
-        var paths = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries).ToList();
+        var paths = new List<string> { LiteRtBin };
+        paths.AddRange((Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries));
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         paths.Add(Path.Combine(home, ".local", "bin"));
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -175,29 +179,7 @@ internal static class LocalEngine
                   ?? throw new LocalEngineException(Loc.T("engine_no_download"));
         var folder = Path.Combine(EnginesFolder, "llama-" + variant);
         var zipPath = Path.Combine(EnginesFolder, $"llama-{variant}.zip");
-        Directory.CreateDirectory(EnginesFolder);
-        using (var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
-        {
-            response.EnsureSuccessStatusCode();
-            long total = response.Content.Headers.ContentLength ?? 0;
-            await using var input = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            await using var output = File.Create(zipPath);
-            var buffer = new byte[1 << 16];
-            long done = 0;
-            int lastPercent = -1;
-            int read;
-            while ((read = await input.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
-            {
-                await output.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                done += read;
-                int percent = total > 0 ? (int)(done * 100 / total) : -1;
-                if (percent != lastPercent && percent % 5 == 0)
-                {
-                    lastPercent = percent;
-                    progress?.Report(Loc.Format("engine_downloading", percent >= 0 ? percent + "%" : $"{done / 1048576} MB"));
-                }
-            }
-        }
+        await DownloadAsync(url, zipPath, "engine_downloading", progress, ct).ConfigureAwait(false);
         progress?.Report(Loc.T("engine_extracting"));
         if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
         ZipFile.ExtractToDirectory(zipPath, folder);
@@ -231,12 +213,17 @@ internal static class LocalEngine
 
     private static async Task StartLiteRtAsync(string model, string backend, IProgress<string>? progress, CancellationToken ct)
     {
-        var cli = FindLiteRtCli() ?? throw new LocalEngineException(Loc.T("engine_no_litert"));
-        const string id = "mouseia";
-        progress?.Report(Loc.T("engine_importing"));
-        var import = await RunToEndAsync(cli, $"import \"{model}\" {id}", TimeSpan.FromMinutes(5), ct).ConfigureAwait(false);
-        if (import.ExitCode != 0 && !import.Output.Contains("exist", StringComparison.OrdinalIgnoreCase))
-            Log.Write("litert-lm import: " + import.Output);
+        var cli = FindLiteRtCli() ?? await InstallLiteRtAsync(progress, ct).ConfigureAwait(false);
+        // The server accepts the file path itself as the model; only a path with a comma
+        // (the separator for ",gpu") needs importing under a simple name first.
+        string reference = model;
+        if (model.Contains(','))
+        {
+            reference = "mouseia-" + Regex.Replace(Path.GetFileNameWithoutExtension(model).ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+            progress?.Report(Loc.T("engine_importing"));
+            var import = await RunToEndAsync(cli, $"import \"{model}\" {reference}", TimeSpan.FromMinutes(10), ct).ConfigureAwait(false);
+            if (import.ExitCode != 0) Log.Write("litert-lm import: " + import.Output);
+        }
         int port = FreePort();
         progress?.Report(Loc.T("engine_loading"));
         if (!await LaunchAndWaitAsync(cli, $"serve --host 127.0.0.1 --port {port}", port, "/v1/models", ct).ConfigureAwait(false))
@@ -245,7 +232,76 @@ internal static class LocalEngine
             Stop();
             throw new LocalEngineException(Loc.Format("engine_failed", Shorten(error)));
         }
-        _modelId = backend == "cpu" ? id + ",cpu" : id + ",gpu";
+        _modelId = reference + (backend == "cpu" ? ",cpu" : ",gpu");
+    }
+
+    private static async Task DownloadAsync(string url, string path, string messageKey, IProgress<string>? progress, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        long total = response.Content.Headers.ContentLength ?? 0;
+        await using var input = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        await using var output = File.Create(path);
+        var buffer = new byte[1 << 16];
+        long done = 0;
+        int lastPercent = -1;
+        int read;
+        while ((read = await input.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        {
+            await output.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            done += read;
+            int percent = total > 0 ? (int)(done * 100 / total) : -1;
+            if (percent != lastPercent && percent % 5 == 0)
+            {
+                lastPercent = percent;
+                progress?.Report(Loc.Format(messageKey, percent >= 0 ? percent + "%" : $"{done / 1048576} MB"));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Installs the LiteRT-LM command line into MouseIA's own folder: uv (a single exe) fetches a private
+    /// Python and the litert-lm package. Nothing is added to the system or to PATH.
+    /// </summary>
+    public static async Task<string> InstallLiteRtAsync(IProgress<string>? progress, CancellationToken ct)
+    {
+        var uvFolder = Path.Combine(LiteRtRoot, "uv");
+        var uv = Directory.Exists(uvFolder)
+            ? Directory.EnumerateFiles(uvFolder, "uv.exe", SearchOption.AllDirectories).FirstOrDefault()
+            : null;
+        if (uv == null)
+        {
+            var zip = Path.Combine(LiteRtRoot, "uv.zip");
+            await DownloadAsync("https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
+                zip, "litert_downloading", progress, ct).ConfigureAwait(false);
+            if (Directory.Exists(uvFolder)) Directory.Delete(uvFolder, recursive: true);
+            ZipFile.ExtractToDirectory(zip, uvFolder);
+            File.Delete(zip);
+            uv = Directory.EnumerateFiles(uvFolder, "uv.exe", SearchOption.AllDirectories).FirstOrDefault()
+                 ?? throw new LocalEngineException(Loc.T("litert_install_failed"));
+        }
+        progress?.Report(Loc.T("litert_installing"));
+        var env = new Dictionary<string, string>
+        {
+            ["UV_TOOL_DIR"] = Path.Combine(LiteRtRoot, "tools"),
+            ["UV_TOOL_BIN_DIR"] = LiteRtBin,
+            ["UV_PYTHON_INSTALL_DIR"] = Path.Combine(LiteRtRoot, "python"),
+            ["UV_CACHE_DIR"] = Path.Combine(LiteRtRoot, "cache"),
+            ["UV_PYTHON_PREFERENCE"] = "only-managed",
+            ["UV_NO_MODIFY_PATH"] = "1",
+        };
+        var result = await RunToEndAsync(uv, "tool install --force --python 3.12 litert-lm", TimeSpan.FromMinutes(20), ct, env)
+            .ConfigureAwait(false);
+        var cli = FindLiteRtCli();
+        if (result.ExitCode != 0 || cli == null)
+        {
+            Log.Write("uv tool install litert-lm: " + result.Output);
+            throw new LocalEngineException(Loc.Format("litert_install_failed_detail", Shorten(result.Output.Trim())));
+        }
+        // The package cache isn't needed once installed.
+        try { Directory.Delete(Path.Combine(LiteRtRoot, "cache"), recursive: true); } catch (Exception) { }
+        return cli;
     }
 
     // ---- process handling ----
@@ -300,7 +356,8 @@ internal static class LocalEngine
         catch (Exception) { return false; }
     }
 
-    private static async Task<(int ExitCode, string Output)> RunToEndAsync(string exe, string args, TimeSpan timeout, CancellationToken ct)
+    private static async Task<(int ExitCode, string Output)> RunToEndAsync(string exe, string args, TimeSpan timeout,
+        CancellationToken ct, IReadOnlyDictionary<string, string>? environment = null)
     {
         var info = new ProcessStartInfo(exe, args)
         {
@@ -309,7 +366,9 @@ internal static class LocalEngine
             RedirectStandardError = true,
             RedirectStandardOutput = true,
         };
-        using var process = Process.Start(info) ?? throw new LocalEngineException(Loc.T("engine_no_litert"));
+        if (environment != null)
+            foreach (var (name, value) in environment) info.Environment[name] = value;
+        using var process = Process.Start(info) ?? throw new LocalEngineException(Loc.T("litert_install_failed"));
         var stdout = process.StandardOutput.ReadToEndAsync(ct);
         var stderr = process.StandardError.ReadToEndAsync(ct);
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);

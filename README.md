@@ -36,8 +36,9 @@ Em **Configurações > Inteligência artificial**:
 - **ChatGPT**: chave da [OpenAI](https://platform.openai.com/api-keys)
 - **Claude**: chave da [Anthropic](https://platform.claude.com/settings/keys)
 - **IA local**: roda no seu PC e nada sai da sua rede. Dois jeitos:
-  - **Arquivo de modelo**: escolha um `.gguf` (ou `.litertlm`) baixado do Hugging Face e pronto.
-    O MouseIA baixa o motor **llama.cpp** sozinho no primeiro uso e usa a placa de vídeo (ou o processador).
+  - **Arquivo de modelo**: escolha um `.gguf` ou `.litertlm` baixado do Hugging Face e pronto.
+    O MouseIA baixa e instala o motor sozinho no primeiro uso, numa pasta só dele: **llama.cpp** para `.gguf`,
+    **LiteRT-LM** (com Python próprio) para `.litertlm`. Usa a placa de vídeo ou o processador.
     Para perguntar sobre imagens, baixe também o arquivo **mmproj** do mesmo modelo na mesma pasta.
   - **Servidor**: Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan… O botão **Detectar** encontra e lista os modelos.
 

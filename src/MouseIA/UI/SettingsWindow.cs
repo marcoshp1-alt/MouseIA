@@ -694,9 +694,25 @@ internal sealed class SettingsWindow : Window
                 engine.Foreground = cli != null ? Theme.Success : Theme.Danger;
                 if (cli == null)
                 {
-                    var copy = new SecondaryButton(Loc.T("copy_install_command"), Theme.Glyph.Copy) { Height = 30 };
-                    copy.Click += () => Clipboard2.SetText("pip install --upgrade litert-lm");
-                    engineActions.Children.Add(copy);
+                    engine.Foreground = Theme.Muted;
+                    var install = new SecondaryButton(Loc.T("install_now"), Theme.Glyph.Add) { Height = 30 };
+                    install.Click += async () =>
+                    {
+                        install.IsEnabled = false;
+                        var progress = new Progress<string>(p => { engine.Foreground = Theme.Muted; engine.Text = p; });
+                        try
+                        {
+                            await Task.Run(() => LocalEngine.InstallLiteRtAsync(progress, CancellationToken.None));
+                            Refresh();
+                        }
+                        catch (Exception ex)
+                        {
+                            engine.Foreground = Theme.Danger;
+                            engine.Text = ex.Message;
+                            install.IsEnabled = true;
+                        }
+                    };
+                    engineActions.Children.Add(install);
                 }
                 return;
             }
