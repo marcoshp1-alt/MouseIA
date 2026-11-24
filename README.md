@@ -1,4 +1,4 @@
-<p align="center"><img src="src/MouseIA/Assets/MouseIA-256.png" width="120" alt="MouseIA"></p>
+<p align="center"><img src="src/MouseIA/Assets/banner.png" alt="MouseIA — selecione qualquer coisa na tela e pergunte à IA"></p>
 
 <h1 align="center">MouseIA <sup>BETA</sup></h1>
 <p align="center"><b>Selecione qualquer coisa na tela e pergunte à IA.</b><br>
