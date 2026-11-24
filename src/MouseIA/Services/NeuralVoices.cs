@@ -24,14 +24,14 @@ internal static class NeuralVoices
     public const string MaleId = "kokoro:male";
 
     private const string EngineUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2";
-    private const string ModelUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2";
+    private const string ModelUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2";
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(30) };
     private static readonly object InstallGate = new();
     private static Task<bool>? _install;
 
     public static string Folder => Path.Combine(AppSettings.DefaultFolder, "voices");
-    private static string ReadyFile => Path.Combine(Folder, "ready-1.txt");
+    private static string ReadyFile => Path.Combine(Folder, "ready-2.txt");
 
     /// <summary>Download progress 0..1, or -1 when not downloading.</summary>
     public static double Progress { get; private set; } = -1;
@@ -62,7 +62,7 @@ internal static class NeuralVoices
 
     // ---- install ----
 
-    /// <summary>Downloads the engine and the voices once (about 160 MB). Safe to call many times.</summary>
+    /// <summary>Downloads the engine and the full-quality voices once (about 370 MB). Safe to call many times.</summary>
     public static Task<bool> EnsureInstalledAsync()
     {
         if (Installed) return Task.FromResult(true);
@@ -82,14 +82,19 @@ internal static class NeuralVoices
             StatusChanged?.Invoke();
             var engineArchive = Path.Combine(Folder, "engine.tar.bz2");
             var modelArchive = Path.Combine(Folder, "voices.tar.bz2");
-            await DownloadAsync(EngineUrl, engineArchive, 0, 0.16).ConfigureAwait(false);
-            await DownloadAsync(ModelUrl, modelArchive, 0.16, 0.97).ConfigureAwait(false);
-            await ExtractAsync(engineArchive).ConfigureAwait(false);
+            bool hasEngine = Directory.GetFiles(Folder, "sherpa-onnx-c-api.dll", SearchOption.AllDirectories).Length > 0;
+            if (!hasEngine)
+            {
+                await DownloadAsync(EngineUrl, engineArchive, 0, 0.07).ConfigureAwait(false);
+                await ExtractAsync(engineArchive).ConfigureAwait(false);
+                File.Delete(engineArchive);
+            }
+            await DownloadAsync(ModelUrl, modelArchive, 0.07, 0.97).ConfigureAwait(false);
             await ExtractAsync(modelArchive).ConfigureAwait(false);
-            File.Delete(engineArchive);
             File.Delete(modelArchive);
+            CleanUp();
             if (Locate() == null) throw new IOException("voice files missing after extraction");
-            File.WriteAllText(ReadyFile, "Kokoro multi-lang v1.0 int8 + sherpa-onnx v1.13.8");
+            File.WriteAllText(ReadyFile, "Kokoro multi-lang v1.0 (full quality) + sherpa-onnx v1.13.8");
             return true;
         }
         catch (Exception ex)
@@ -102,6 +107,23 @@ internal static class NeuralVoices
             Progress = -1;
             StatusChanged?.Invoke();
         }
+    }
+
+    /// <summary>Removes the older compressed voices and files only Chinese/English lexicons need.</summary>
+    private static void CleanUp()
+    {
+        try
+        {
+            var old = Path.Combine(Folder, "kokoro-int8-multi-lang-v1_0");
+            if (Directory.Exists(old)) Directory.Delete(old, recursive: true);
+            foreach (var old1 in Directory.GetFiles(Folder, "ready-1.txt")) File.Delete(old1);
+            var model = Path.Combine(Folder, "kokoro-multi-lang-v1_0");
+            foreach (var pattern in new[] { "lexicon-*.txt", "*.fst" })
+                foreach (var file in Directory.GetFiles(model, pattern)) File.Delete(file);
+            var dict = Path.Combine(model, "dict");
+            if (Directory.Exists(dict)) Directory.Delete(dict, recursive: true);
+        }
+        catch (Exception ex) { Log.Write("Voice cleanup: " + ex.Message); }
     }
 
     private static async Task DownloadAsync(string url, string path, double from, double to)
@@ -159,7 +181,7 @@ internal static class NeuralVoices
         try
         {
             var library = Directory.GetFiles(Folder, "sherpa-onnx-c-api.dll", SearchOption.AllDirectories).FirstOrDefault();
-            var model = Directory.GetFiles(Folder, "model.int8.onnx", SearchOption.AllDirectories).FirstOrDefault();
+            var model = Directory.GetFiles(Folder, "model.onnx", SearchOption.AllDirectories).FirstOrDefault();
             if (library == null || model == null) return null;
             var libDir = Path.GetDirectoryName(library)!;
             var modelDir = Path.GetDirectoryName(model)!;

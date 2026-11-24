@@ -5,8 +5,10 @@ using System.Linq;
 namespace MouseIA.Core;
 
 /// <summary>A piece of recognized text and where it is, in image pixels.</summary>
-public sealed record OcrBox(string Text, double X, double Y, double Width, double Height)
+public sealed record OcrBox(string Text, double X, double Y, double Width, double Height, int Lines = 1)
 {
+    /// <summary>Height of one line of the original text.</summary>
+    public double LineHeight => Height / Math.Max(1, Lines);
     public double Right => X + Width;
     public double Bottom => Y + Height;
 }
@@ -73,6 +75,7 @@ public static class TextBlocks
     {
         double x = parts.Min(p => p.X), y = parts.Min(p => p.Y);
         double right = parts.Max(p => p.Right), bottom = parts.Max(p => p.Bottom);
-        return new OcrBox(string.Join(separator, parts.Select(p => p.Text.Trim())), x, y, right - x, bottom - y);
+        int lines = separator == "\n" ? parts.Sum(p => p.Lines) : parts.Max(p => p.Lines);
+        return new OcrBox(string.Join(separator, parts.Select(p => p.Text.Trim())), x, y, right - x, bottom - y, lines);
     }
 }

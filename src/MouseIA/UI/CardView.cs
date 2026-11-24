@@ -148,10 +148,45 @@ internal sealed class CardView : Grid
         headerActions.Children.Add(settingsButton);
         headerActions.Children.Add(closeButton);
 
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
+        // The header is the handle: drag it to move the card anywhere on the screen.
+        var header = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 12),
+            Background = Brushes.Transparent,
+            Cursor = Cursors.SizeAll,
+            ToolTip = Loc.T("drag_card"),
+        };
         DockPanel.SetDock(headerActions, Dock.Right);
         header.Children.Add(headerActions);
         header.Children.Add(thumbRow);
+        Point dragFrom = default;
+        bool dragging = false;
+        header.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.Handled) return;
+            dragging = true;
+            dragFrom = e.GetPosition(_host);
+            header.CaptureMouse();
+            e.Handled = true;
+        };
+        header.MouseMove += (_, e) =>
+        {
+            if (!dragging) return;
+            var now = e.GetPosition(_host);
+            double x = Math.Clamp(_left + now.X - dragFrom.X, 0, Math.Max(0, _host.ScreenWidthDip - ActualWidth));
+            double y = Math.Clamp(_top + now.Y - dragFrom.Y, 0, Math.Max(0, _host.ScreenHeightDip - ActualHeight));
+            dragFrom = now;
+            UserMoved = true;
+            MoveTo(x, y);
+        };
+        void EndDrag()
+        {
+            if (!dragging) return;
+            dragging = false;
+            header.ReleaseMouseCapture();
+        }
+        header.MouseLeftButtonUp += (_, _) => EndDrag();
+        header.LostMouseCapture += (_, _) => dragging = false;
 
         // ---- tools ----
         var target = Languages.Resolve(_settings.TranslateTo, CultureInfo.CurrentUICulture);
@@ -325,6 +360,12 @@ internal sealed class CardView : Grid
     // ---- geometry ----
 
     private double _left, _top;
+
+    /// <summary>The user dragged the card somewhere: it stays there.</summary>
+    public bool UserMoved { get; private set; }
+
+    public double Left => _left;
+    public double Top => _top;
 
     public void MoveTo(double left, double top)
     {

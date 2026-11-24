@@ -926,7 +926,15 @@ internal sealed class SettingsWindow : Window
     private FrameworkElement ActivationPage()
     {
         var page = Page(Loc.T("nav_activation"), Loc.T("activation_subtitle"));
-        page.Children.Add(Section(Field(Loc.T("hotkey"), Loc.T("hotkey_help"), new HotkeyBox(_draft.Hotkey, h => { _draft.Hotkey = h; Changed(); }, _app))));
+        var settingsKeys = new HotkeyBox(_draft.SettingsHotkey, h => { _draft.SettingsHotkey = h; Changed(); }, _app);
+        var clearKeys = new IconButton(Theme.Glyph.Close, Loc.T("hotkey_remove"), 34, 11) { Margin = new Thickness(8, 0, 0, 0) };
+        clearKeys.Click += () => { _draft.SettingsHotkey = ""; settingsKeys.SetValue(""); Changed(); };
+        var settingsRow = new StackPanel { Orientation = Orientation.Horizontal };
+        settingsRow.Children.Add(settingsKeys);
+        settingsRow.Children.Add(clearKeys);
+        page.Children.Add(Section(
+            Field(Loc.T("hotkey"), Loc.T("hotkey_help"), new HotkeyBox(_draft.Hotkey, h => { _draft.Hotkey = h; Changed(); }, _app)),
+            Field(Loc.T("settings_hotkey"), Loc.T("settings_hotkey_help"), settingsRow)));
 
         var sensitivity = DarkSlider(1, 10, _draft.ShakeSensitivity, 1);
         sensitivity.ValueChanged += (_, e) => { _draft.ShakeSensitivity = (int)e.NewValue; Changed(); };
@@ -1334,7 +1342,7 @@ internal sealed class HotkeyBox : Clickable
         Padding = new Thickness(12, 0, 12, 0);
         var icon = Ui.Icon(Theme.Glyph.Keyboard, 14, Theme.Muted);
         icon.Margin = new Thickness(0, 0, 10, 0);
-        _label = Ui.Label(value, 13.5, Theme.Text, FontWeights.SemiBold);
+        _label = Ui.Label(Shown(value), 13.5, Theme.Text, FontWeights.SemiBold);
         var row = new StackPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(icon);
         row.Children.Add(_label);
@@ -1360,8 +1368,16 @@ internal sealed class HotkeyBox : Clickable
         _capturing = false;
         _app.SuspendHotkey(false);
         BorderBrush = Theme.FieldStroke;
-        _label.Text = _value;
+        _label.Text = Shown(_value);
         _label.Foreground = Theme.Text;
+    }
+
+    private static string Shown(string value) => value.Length == 0 ? Loc.T("hotkey_none") : value;
+
+    public void SetValue(string value)
+    {
+        _value = value;
+        _label.Text = Shown(value);
     }
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)

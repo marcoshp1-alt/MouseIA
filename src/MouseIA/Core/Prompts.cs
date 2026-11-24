@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -63,6 +64,52 @@ public static class Prompts
         sb.Append($"Reply with the {target.English} translation only.");
         return sb.ToString();
     }
+
+    /// <summary>
+    /// One request for many separate pieces of on-screen text (a title, labels, paragraphs).
+    /// Each comes back on its own numbered line, so it can be drawn back in its place.
+    /// </summary>
+    public static string TranslateBatchRequest(LanguageInfo target, IReadOnlyList<string> items)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"These are separate pieces of text from a screen (titles, labels, buttons, paragraphs). ");
+        sb.Append($"Translate each one into {Name(target)}.\n");
+        sb.Append("Reply with exactly one line per piece, in the same order, starting with its number in square brackets, ");
+        sb.Append("like: [1] translation. Keep numbers, names, code and URLs as they are. Nothing else.\n\n");
+        for (int i = 0; i < items.Count; i++)
+            sb.Append('[').Append(i + 1).Append("] ").Append(Regex.Replace(items[i], @"\s+", " ").Trim()).Append('\n');
+        return sb.ToString();
+    }
+
+    /// <summary>Reads the numbered lines back; a missing number stays null.</summary>
+    public static string?[] ParseBatch(string reply, int count)
+    {
+        var result = new string?[count];
+        int current = -1;
+        foreach (var raw in reply.Replace("\r", "").Split('\n'))
+        {
+            var line = raw.Trim();
+            var m = Regex.Match(line, @"^(?:[-*•]\s*)?\[(\d{1,3})\]\s*(.*)$");
+            if (m.Success)
+            {
+                // A number that isn't ours ends the previous piece too.
+                current = int.TryParse(m.Groups[1].Value, out int n) && n >= 1 && n <= count ? n - 1 : -1;
+                if (current >= 0) result[current] = CleanPiece(m.Groups[2].Value);
+            }
+            else if (current >= 0 && line.Length > 0 && result[current] != null)
+            {
+                result[current] += " " + CleanPiece(line);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Removes markers a model sometimes copies from the request.</summary>
+    public static string CleanPiece(string text) =>
+        text.Replace("<<<", "").Replace(">>>", "").Trim().Trim('"', '“', '”').Trim();
+
+    /// <summary>Pieces with no letters or digits (bullets, arrows, icons) are left as they are.</summary>
+    public static bool IsTranslatable(string text) => text.Any(char.IsLetter);
 
     /// <summary>
     /// True when a "translation" is basically the source text again (the model echoed it).

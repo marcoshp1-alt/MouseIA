@@ -113,6 +113,12 @@ static class P
         Check(grouped.Any(b => b.Text == "Big Title"), "title kept apart");
         Check(grouped.Any(b => b.Text == "OK") && grouped.Any(b => b.Text == "Cancel"), "separate buttons split");
         Check(AppSettings.IsAction("lens"), "lens action");
+        var parsed = Prompts.ParseBatch("Aqui está:\n[1] Firmware\n[2] Número de série >>>\n[3] Recursos que\ncontinuam\n[9] extra", 3);
+        Check(parsed[0] == "Firmware" && parsed[1] == "Número de série" && parsed[2] == "Recursos que continuam", "batch reply parsed");
+        Check(Prompts.ParseBatch("[2] só dois", 3)[0] == null, "missing batch item stays empty");
+        Check(Prompts.TranslateBatchRequest(Languages.Resolve("pt", System.Globalization.CultureInfo.InvariantCulture), new[] { "Hello\nworld", "OK" }).Contains("[1] Hello world\n[2] OK"), "batch request numbered");
+        Check(!Prompts.IsTranslatable("•") && !Prompts.IsTranslatable(">>> 42") && Prompts.IsTranslatable("Save"), "symbols skipped");
+        Check(grouped.First(b => b.Text.StartsWith("first")).Lines == 2, "block line count");
         Check(ModelCatalog.ModelsFor(new AppSettings { Provider = "grok", Quality = "smart" }).SequenceEqual(new[] { "grok-4.7", "grok-4.5" }), "grok models");
 
         // Languages

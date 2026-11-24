@@ -12,7 +12,8 @@ Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e 
 2. **Passe o mouse** sobre um parágrafo, botão, imagem ou janela: ele se ilumina.
    - **Botão esquerdo** (clicar ou arrastar): abre o cartão para perguntar.
    - **Botão direito arrastando**: traduz a área ali mesmo, por cima da tela, sem abrir o cartão.
-     Se a área tiver vários elementos (título, parágrafos, botões), cada um ganha a sua tradução com a própria borda.
+     Como no Circule para Pesquisar: cada texto (título, parágrafo, botão) é reescrito no próprio lugar, sobre a cor de fundo original.
+     Uma barrinha embaixo copia, lê em voz alta, mostra o original ou fecha.
    - As ações de cada botão (e da rolagem) podem ser trocadas em Configurações > Ativação.
 3. No cartão que aparece, **pergunte o que quiser** ou use os botões:
 
@@ -29,11 +30,13 @@ Mais coisas:
 - **Digite direto:** com o MouseIA aberto, comece a digitar para perguntar sem selecionar nada.
 - **Várias seleções:** o botão **+** junta outra área da tela na mesma pergunta.
 - **Ditado:** o 🎤 no campo de texto transforma sua fala em pergunta.
+- **Atalho das configurações:** opcional, em Configurações > Ativação.
 - **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral). As animações rodam na taxa do seu monitor (120, 144, 240 Hz…).
 - **Vozes naturais do MouseIA:** voz feminina e masculina com som humano, offline (português, inglês, espanhol, francês, italiano e hindi).
-  O MouseIA baixa sozinho uma vez (cerca de 160 MB); nada para configurar.
+  O MouseIA baixa sozinho uma vez (cerca de 370 MB, qualidade máxima); nada para configurar.
 - Respostas com **Copiar**, **Ouvir** e **Tentar de novo**.
 - **Esc** ou **clique com o botão direito** fecha.
+- O cartão pode ser **arrastado** pelo topo para qualquer lugar da tela.
 
 ## Qual IA responde
 
@@ -60,7 +63,7 @@ Baixe o `MouseIA-Setup.exe` na página de **Releases** e instale. Não precisa s
 Também há a versão **portátil** (`MouseIA-Portable.exe`), que roda sem instalar.
 
 **Atualizações automáticas:** o MouseIA confere o GitHub e se atualiza sozinho (Configurações > Atualizações).
-Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.3.0`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
+Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.3.2`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
 
 Requer Windows 10 (versão 2004) ou mais novo, 64 bits.
 

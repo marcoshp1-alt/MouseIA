@@ -27,6 +27,7 @@ internal sealed class AppController : IDisposable
     private MouseHook? _hook;
     private IntPtr _trayIcon;
     private int _hotkeyId;
+    private int _settingsHotkeyId;
     private readonly System.Collections.Generic.List<OverlayWindow> _overlays = new();
     private volatile bool _overlayOpen;
     private volatile bool _resetShake;
@@ -123,6 +124,25 @@ internal sealed class AppController : IDisposable
             _tray?.Notify("MouseIA", Loc.Format("hotkey_taken", Settings.Hotkey));
         }
         _tray?.SetTip(TrayTip());
+        RegisterSettingsHotkey();
+    }
+
+    private void RegisterSettingsHotkey()
+    {
+        if (_messages == null) return;
+        _messages.UnregisterHotkey(_settingsHotkeyId);
+        _settingsHotkeyId = 0;
+        if (Settings.SettingsHotkey.Length == 0) return;
+        _settingsHotkeyId = _messages.RegisterHotkey(Settings.SettingsHotkey, () => _application.Dispatcher.BeginInvoke(() =>
+        {
+            CloseAllOverlays();
+            OpenSettings();
+        }));
+        if (_settingsHotkeyId == 0)
+        {
+            Log.Write("Settings hotkey unavailable: " + Settings.SettingsHotkey);
+            _tray?.Notify("MouseIA", Loc.Format("hotkey_taken", Settings.SettingsHotkey));
+        }
     }
 
     public void SuspendHotkey(bool suspend)
@@ -132,6 +152,8 @@ internal sealed class AppController : IDisposable
         {
             _messages.UnregisterHotkey(_hotkeyId);
             _hotkeyId = 0;
+            _messages.UnregisterHotkey(_settingsHotkeyId);
+            _settingsHotkeyId = 0;
         }
         else if (_hotkeyId == 0)
         {
@@ -382,7 +404,7 @@ internal sealed class AppController : IDisposable
 
     public void ApplySettings(AppSettings next)
     {
-        bool hotkeyChanged = next.Hotkey != Settings.Hotkey;
+        bool hotkeyChanged = next.Hotkey != Settings.Hotkey || next.SettingsHotkey != Settings.SettingsHotkey;
         bool languageChanged = next.UiLanguage != Settings.UiLanguage;
         bool modelChanged = next.LocalModelFile != Settings.LocalModelFile || next.LocalMmproj != Settings.LocalMmproj ||
                             next.LocalBackend != Settings.LocalBackend || next.Provider != Settings.Provider ||

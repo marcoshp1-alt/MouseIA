@@ -43,6 +43,8 @@ internal sealed class OverlayWindow : Window
     private bool _dragging;
     private readonly List<FrameworkElement> _layers = new();
     private bool _acted;
+    private IntPtr _previousForeground;
+    private DateTime _openedAt = DateTime.UtcNow;
     private bool _hintFollows = true;
     private Rect _hover = Rect.Empty;
     private Rect _selection = Rect.Empty;
@@ -76,7 +78,10 @@ internal sealed class OverlayWindow : Window
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
         Topmost = true;
-        Background = Brushes.Black;
+        // Behind everything is the screen itself, so no moment of the window can ever show black.
+        var screenBrush = new ImageBrush(shot.Image) { Stretch = Stretch.Fill };
+        if (screenBrush.CanFreeze) screenBrush.Freeze();
+        Background = screenBrush;
         WindowStartupLocation = WindowStartupLocation.Manual;
         Left = -32000;
         Top = -32000;
@@ -176,6 +181,8 @@ internal sealed class OverlayWindow : Window
         });
         if (_primary)
         {
+            _previousForeground = Win32.GetForegroundWindow();
+            _openedAt = DateTime.UtcNow;
             Win32.ForceForeground(Handle);
             Activate();
             Focus();
@@ -553,52 +560,38 @@ internal sealed class OverlayWindow : Window
     private void TranslateHere(Rect area, bool speak) => _ = TranslateHereAsync(area, speak);
 
     /// <summary>
-    /// Translates in place. When the area holds several separate pieces of text (a title, paragraphs,
-    /// buttons), each gets its own translation over it, so it reads like the original layout.
+    /// Translates in place, like Circle to Search: every piece of text in the area is rewritten
+    /// right where it is, over its own background colour.
     /// </summary>
     private async System.Threading.Tasks.Task TranslateHereAsync(Rect area, bool speak)
     {
         _frame.Visibility = Visibility.Collapsed;
-        var image = Crop(area);
+        // A little margin around the area, so the background around the text can be sampled.
+        const double margin = 6;
+        var padded = new Rect(area.X - margin, area.Y - margin, area.Width + margin * 2, area.Height + margin * 2);
+        padded.Intersect(new Rect(0, 0, ScreenWidthDip, ScreenHeightDip));
+        var pixelRect = new Int32Rect((int)Math.Round(padded.X * _scale), (int)Math.Round(padded.Y * _scale),
+            (int)Math.Round(padded.Width * _scale), (int)Math.Round(padded.Height * _scale));
+        pixelRect.Width = Math.Min(pixelRect.Width, Shot.Image.PixelWidth - pixelRect.X);
+        pixelRect.Height = Math.Min(pixelRect.Height, Shot.Image.PixelHeight - pixelRect.Y);
+        var image = ImageUtil.Crop(Shot.Image, pixelRect);
+        var imageArea = new Rect(pixelRect.X / _scale, pixelRect.Y / _scale, pixelRect.Width / _scale, pixelRect.Height / _scale);
+
         List<OcrBox> blocks;
         try { blocks = await System.Threading.Tasks.Task.Run(() => OcrService.RecognizeBlocksAsync(image)); }
         catch (Exception) { blocks = new List<OcrBox>(); }
+        if (_closing) return;
 
-        if (blocks.Count <= 1 || blocks.Count > 16)
+        if (blocks.Any(b => Prompts.IsTranslatable(b.Text)))
         {
-            AddLayer(new TranslationLayer(this, _settings, image, area, speak, null));
+            var inline = new InlineTranslation(this, _settings, image, imageArea, _scale, blocks, area,
+                speak || _settings.SpeakOverlayTranslation);
+            _layers.Add(inline);
+            _root.Children.Insert(_root.Children.IndexOf(_hint), inline);
             return;
         }
-
-        var layers = new List<TranslationLayer>();
-        foreach (var block in blocks)
-        {
-            const double pad = 4;
-            var rect = new Rect(area.X + block.X / _scale - pad, area.Y + block.Y / _scale - pad,
-                block.Width / _scale + pad * 2, block.Height / _scale + pad * 2);
-            rect.Intersect(new Rect(0, 0, ScreenWidthDip, ScreenHeightDip));
-            if (rect.IsEmpty) continue;
-            var piece = ImageUtil.Crop(image, new Int32Rect(
-                (int)Math.Max(0, block.X), (int)Math.Max(0, block.Y),
-                (int)Math.Min(image.PixelWidth - Math.Max(0, block.X), Math.Max(1, block.Width)),
-                (int)Math.Min(image.PixelHeight - Math.Max(0, block.Y), Math.Max(1, block.Height))));
-            var layer = new TranslationLayer(this, _settings, piece, rect, speak: false, source: block.Text);
-            layers.Add(layer);
-            AddLayer(layer);
-        }
-        if (!speak) return;
-        // Read the blocks aloud one after another, top to bottom.
-        foreach (var layer in layers)
-        {
-            var text = await layer.Done;
-            if (text.Length == 0 || !layer.IsLoaded) continue;
-            try
-            {
-                var target = Languages.Resolve(_settings.TranslateTo, System.Globalization.CultureInfo.CurrentUICulture);
-                await SpeechService.SpeakToEndAsync(text, target.Code, _settings.VoiceRate, _settings.VoiceId);
-            }
-            catch (Exception ex) { Log.Write("Overlay speak: " + ex.Message); }
-        }
+        // No readable text (a photo, a drawing): the AI looks at the picture instead.
+        AddLayer(new TranslationLayer(this, _settings, Crop(area), area, speak));
     }
 
     private void AddLayer(TranslationLayer layer)
@@ -766,6 +759,7 @@ internal sealed class OverlayWindow : Window
         foreach (var layer in _layers)
         {
             if (layer is TranslationLayer t) t.Cancel();
+            if (layer is InlineTranslation i) i.Cancel();
             _root.Children.Remove(layer);
         }
         _layers.Clear();
@@ -866,6 +860,12 @@ internal sealed class OverlayWindow : Window
         double h = _card.ActualHeight > 0 ? _card.ActualHeight : _card.DesiredSize.Height;
         double sw = ScreenWidthDip, sh = ScreenHeightDip;
         const double gap = 14, margin = 12;
+        if (_card.UserMoved)
+        {
+            // Stay where the user put it; just keep it on the screen as it grows.
+            _card.MoveTo(Math.Clamp(_card.Left, 0, Math.Max(0, sw - w)), Math.Clamp(_card.Top, 0, Math.Max(0, sh - h)));
+            return;
+        }
         double x, y;
         if (anchor.Bottom + gap + h <= sh - margin)
         {
@@ -967,6 +967,14 @@ internal sealed class OverlayWindow : Window
             var foreground = Win32.GetForegroundWindow();
             Win32.GetWindowThreadProcessId(foreground, out var pid);
             if (pid == Win32.CurrentProcessId) return;
+            // Right after opening, the app underneath sometimes takes the focus back by itself:
+            // take it back instead of closing.
+            if (foreground == _previousForeground && (DateTime.UtcNow - _openedAt).TotalSeconds < 2.5)
+            {
+                Win32.ForceForeground(Handle);
+                Activate();
+                return;
+            }
             var cls = Win32.WindowClass(foreground);
             if (cls is "Windows.UI.Core.CoreWindow" or "Shell_InputSwitchTopLevelWindow" or "Xaml_WindowedPopupClass") return;
             if (_card?.IsBusy == true) return;
@@ -986,8 +994,21 @@ internal sealed class OverlayWindow : Window
         _idle.Stop();
         _probe?.Dispose();
         _card?.CancelAll();
-        foreach (var layer in _layers) if (layer is TranslationLayer t) t.Cancel();
-        Ui.Fade(_root, 0, 120, Close);
+        foreach (var layer in _layers)
+        {
+            if (layer is TranslationLayer t) t.Cancel();
+            if (layer is InlineTranslation i) i.Cancel();
+        }
+        // The frozen picture is identical to the real screen, so only our own things fade out;
+        // fading the picture itself would show the black window behind it for a moment.
+        _screenPulse.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        _screenPulse.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        _screenPulse.ScaleX = _screenPulse.ScaleY = 1;
+        var parts = _root.Children.OfType<UIElement>().Where(c => !ReferenceEquals(c, _screen)).ToList();
+        if (parts.Count == 0) { Close(); return; }
+        foreach (var part in parts) part.IsHitTestVisible = false;
+        int left = parts.Count;
+        foreach (var part in parts) Ui.Fade(part, 0, 110, () => { if (--left == 0) Close(); });
     }
 
     internal void OpenSettingsAndClose()

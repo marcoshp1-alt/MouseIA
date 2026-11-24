@@ -57,6 +57,8 @@ public sealed class AppSettings
 
     // Activation
     public string Hotkey { get; set; } = "Alt+Shift+M";
+    /// <summary>Optional shortcut that opens the settings window ("" = none).</summary>
+    public string SettingsHotkey { get; set; } = "";
     public bool Shake { get; set; } = true;
     public int ShakeSensitivity { get; set; } = 5; // 1..10
     public bool DisableInFullscreen { get; set; } = true;
@@ -200,6 +202,8 @@ public sealed class AppSettings
         LocalUrl = (LocalUrl ?? "").Trim();
         LocalModel = (LocalModel ?? "").Trim();
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "Alt+Shift+M";
+        SettingsHotkey = (SettingsHotkey ?? "").Trim();
+        if (SettingsHotkey.Equals(Hotkey, StringComparison.OrdinalIgnoreCase)) SettingsHotkey = "";
     }
 
     public static readonly string[] Actions = { "ask", "translate", "translate_speak", "copy_text", "qr", "lens", "none" };

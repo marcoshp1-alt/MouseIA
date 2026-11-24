@@ -289,17 +289,43 @@ internal static class Win32
     }
 
     /// <summary>True when the foreground app covers its whole monitor (games, videos, presentations).</summary>
+    [DllImport("shell32.dll")]
+    private static extern int SHQueryUserNotificationState(out int state);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsZoomed(IntPtr hwnd);
+
+    /// <summary>
+    /// True only for real full-screen use: games, videos and presentations. A normal maximized
+    /// window (whose frame hangs a few pixels past the screen edges) does not count.
+    /// </summary>
     public static bool ForegroundIsFullscreen()
     {
+        // What Windows itself uses to hold notifications back.
+        try
+        {
+            if (SHQueryUserNotificationState(out int state) == 0)
+            {
+                const int Busy = 2, D3dFullScreen = 3, Presentation = 4;
+                if (state is D3dFullScreen or Presentation) return true;
+                if (state != Busy) return false;
+            }
+        }
+        catch (Exception) { }
+
         var hwnd = GetForegroundWindow();
         if (hwnd == IntPtr.Zero || hwnd == GetShellWindow() || hwnd == GetDesktopWindow()) return false;
         var cls = WindowClass(hwnd);
         if (cls is "Progman" or "WorkerW" or "Shell_TrayWnd") return false;
+        if (IsZoomed(hwnd)) return false;
+        const int GWL_STYLE = -16;
+        const long WS_CAPTION = 0x00C00000;
+        if ((GetWindowLongPtr(hwnd, GWL_STYLE).ToInt64() & WS_CAPTION) == WS_CAPTION) return false;
         if (!GetWindowRect(hwnd, out var rect)) return false;
         var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
         if (!GetMonitorInfo(monitor, ref info)) return false;
-        return rect.Left <= info.rcMonitor.Left && rect.Top <= info.rcMonitor.Top &&
-               rect.Right >= info.rcMonitor.Right && rect.Bottom >= info.rcMonitor.Bottom;
+        return rect.Left == info.rcMonitor.Left && rect.Top == info.rcMonitor.Top &&
+               rect.Right == info.rcMonitor.Right && rect.Bottom == info.rcMonitor.Bottom;
     }
 }
