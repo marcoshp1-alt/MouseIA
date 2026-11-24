@@ -39,7 +39,7 @@ public sealed class AppSettings
     [JsonIgnore] public string GrokKey { get; set; } = "";
     [JsonIgnore] public string LocalKey { get; set; } = "";
     public string Quality { get; set; } = "fast"; // fast | balanced | smart
-    public string LocalUrl { get; set; } = "http://127.0.0.1:11434/v1";
+    public string LocalUrl { get; set; } = "";
     public string LocalModel { get; set; } = "";
     /// <summary>"file": MouseIA runs a model file itself; "server": an external server (Ollama, LM Studio…).</summary>
     public string LocalMode { get; set; } = "file";
@@ -93,7 +93,7 @@ public sealed class AppSettings
     /// <summary>Use (and download once) MouseIA's own natural voices.</summary>
     public bool NaturalVoices { get; set; } = true;
     /// <summary>Run as administrator, so the shake works over apps opened as administrator.</summary>
-    public bool RunAsAdmin { get; set; }
+    public bool RunAsAdmin { get; set; } = true;
     /// <summary>Live translation of whatever window is in front.</summary>
     public bool LiveTranslate { get; set; }
     /// <summary>"auto" picks the best voice for each language (natural/neural first), or a voice id.</summary>

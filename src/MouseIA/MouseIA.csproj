@@ -15,7 +15,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\MouseIA.ico</ApplicationIcon>
 
-    <Version>1.4.0</Version>
+    <Version>1.4.1</Version>
     <Product>MouseIA</Product>
     <Company>Odorizzi</Company>
     <Authors>Odorizzi</Authors>

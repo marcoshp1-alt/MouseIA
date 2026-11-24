@@ -829,12 +829,31 @@ internal sealed class OverlayWindow : Window
         CloseOverlay();
     }
 
+    private DateTime _lastWheel = DateTime.MinValue;
+
+    /// <summary>A wheel turn at a screen point (physical pixels). True when it was on this monitor.</summary>
+    internal bool WheelAt(int screenX, int screenY)
+    {
+        var b = Shot.Bounds;
+        if (screenX < b.X || screenY < b.Y || screenX >= b.X + b.Width || screenY >= b.Y + b.Height) return false;
+        // One action per turn of the wheel, not one per notch.
+        if ((DateTime.UtcNow - _lastWheel).TotalMilliseconds < 700) return true;
+        if (_mode != Mode.Pointing || _settings.ScrollAction == "none") return true;
+        var point = new Point((screenX - b.X) / _scale, (screenY - b.Y) / _scale);
+        if (_hover.IsEmpty || !_hover.Contains(point)) UpdateHover(point);
+        if (_hover.IsEmpty) return true;
+        _lastWheel = DateTime.UtcNow;
+        RunAction(_settings.ScrollAction, _hover);
+        return true;
+    }
+
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
-        if (_mode != Mode.Pointing || _settings.ScrollAction == "none" || _hover.IsEmpty) return;
+        // Delivered by the mouse hook (WheelAt) when it's on; this is the fallback.
         e.Handled = true;
-        RunAction(_settings.ScrollAction, _hover);
+        var screen = PointToScreen(e.GetPosition(this));
+        WheelAt((int)screen.X, (int)screen.Y);
     }
 
     private void Select(Rect rectDip)

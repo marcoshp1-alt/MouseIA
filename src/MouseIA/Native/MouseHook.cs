@@ -91,8 +91,21 @@ internal sealed class MouseHook : IDisposable
         thread.Join(TimeSpan.FromSeconds(2));
     }
 
+    /// <summary>Mouse wheel (screen x, y, delta) on the hook thread; return true to swallow it.</summary>
+    public Func<int, int, int, bool>? Wheel;
+
     private IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        const int WM_MOUSEWHEEL = 0x020A;
+        if (nCode >= 0 && wParam.ToInt32() == WM_MOUSEWHEEL && Wheel != null)
+        {
+            var data = Marshal.PtrToStructure<Win32.MSLLHOOKSTRUCT>(lParam);
+            try
+            {
+                if (Wheel(data.pt.X, data.pt.Y, (short)(data.mouseData >> 16))) return new IntPtr(1);
+            }
+            catch (Exception) { }
+        }
         if (nCode >= 0 && wParam.ToInt32() == Win32.WM_MOUSEMOVE && Moved != null)
         {
             var data = Marshal.PtrToStructure<Win32.MSLLHOOKSTRUCT>(lParam);

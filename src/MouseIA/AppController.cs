@@ -66,8 +66,9 @@ internal sealed class AppController : IDisposable
         StartElevationWatch();
 
         StartUpdateChecks();
+        Services.Cleanup.RunPending();
         StartNaturalVoices();
-        if (Settings.LiveTranslate) UI.LiveTranslation.StartFollowing(this);
+        // Live translation is in beta and locked for now.
 
         if (!Settings.FirstRunDone)
         {
@@ -170,12 +171,15 @@ internal sealed class AppController : IDisposable
         _shake.Scale = Math.Max(1.0, VisualScale());
         _shake.Reset();
         _shakeEnabled = Settings.Shake;
-        if (Settings.Shake)
+        _wheelEnabled = Settings.ScrollAction != "none";
+        // The hook also delivers the mouse wheel to MouseIA reliably, whatever window has the focus.
+        if (Settings.Shake || _wheelEnabled)
         {
             if (_hook == null)
             {
                 _hook = new MouseHook();
                 _hook.Moved += OnMouseMoved;
+                _hook.Wheel = OnMouseWheel;
             }
             if (!_hook.Install()) Log.Write("Mouse hook failed.");
         }
@@ -190,6 +194,20 @@ internal sealed class AppController : IDisposable
         Win32.GetCursorPos(out var point);
         Win32.MonitorAt(point, out var monitor);
         return Win32.MonitorScale(monitor);
+    }
+
+    private volatile bool _wheelEnabled;
+
+    // Runs on the hook thread: with MouseIA open, the wheel runs the chosen action on what's under the pointer.
+    private bool OnMouseWheel(int x, int y, int delta)
+    {
+        if (!_overlayOpen || !_wheelEnabled) return false;
+        _application.Dispatcher.BeginInvoke(DispatcherPriority.Send, () =>
+        {
+            foreach (var overlay in _overlays)
+                if (overlay.WheelAt(x, y)) break;
+        });
+        return true;
     }
 
     // Runs on the hook thread.
@@ -309,8 +327,6 @@ internal sealed class AppController : IDisposable
     private void StartNaturalVoices()
     {
         Services.SpeechService.UseNeuralVoices = Settings.NaturalVoices;
-        if (Settings.LiveTranslate && UI.LiveTranslation.Current is not { Following: true }) UI.LiveTranslation.StartFollowing(this);
-        else if (!Settings.LiveTranslate && UI.LiveTranslation.Current is { Following: true }) UI.LiveTranslation.Stop();
         if (!Settings.NaturalVoices || Services.NeuralVoices.Installed) return;
         var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
         timer.Tick += (_, _) =>
@@ -408,10 +424,7 @@ internal sealed class AppController : IDisposable
         var menu = new ContextMenu { Placement = PlacementMode.MousePoint };
         menu.Items.Add(MenuItem(Loc.Format("menu_open", Settings.Hotkey), () => ShowPointer()));
         menu.Items.Add(MenuItem(Loc.T("menu_settings"), () => OpenSettings()));
-        if (UI.LiveTranslation.Current != null)
-            menu.Items.Add(MenuItem(Loc.T("live_stop"), () => { if (Settings.LiveTranslate) SetLiveTranslation(false); else UI.LiveTranslation.Stop(); }));
-        else
-            menu.Items.Add(MenuItem(Loc.T("live_start"), () => SetLiveTranslation(true)));
+
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem(Settings.Shake ? Loc.T("menu_shake_off") : Loc.T("menu_shake_on"), () =>
         {

@@ -30,9 +30,11 @@ Mais coisas:
 - **Digite direto:** com o MouseIA aberto, comece a digitar para perguntar sem selecionar nada.
 - **Várias seleções:** o botão **+** junta outra área da tela na mesma pergunta.
 - **Ditado:** o 🎤 no campo de texto transforma sua fala em pergunta.
-- **Tradução ao vivo:** traduz em tempo real a janela que estiver na frente (ou só uma janela, pelo botão ▶ depois de traduzir), por cima do texto, enquanto você usa. Ligue em Configurações > Tradutor e voz.
+- **Tradução ao vivo (beta):** em testes, ainda não disponível.
 - **10 idiomas no app:** inglês, chinês, hindi, espanhol, árabe, bengali, francês, português, russo e urdu.
-- **Apps de administrador:** ative "Funcionar também em apps de administrador" para o balanço funcionar sobre eles.
+- **Apps de administrador:** o MouseIA abre como administrador por padrão (o Windows pede permissão uma vez), para o balanço funcionar sobre qualquer app. Se recusar, ele abre normal e dá para ligar depois em Ativação.
+- **Instalados:** mostra chaves de API, IAs locais, cache, motor e vozes naturais, com tamanho e pasta, e deixa remover cada um.
+- **Privacidade:** sem servidor próprio, sem conta e sem coleta de dados. Detalhes em Configurações > Sobre.
 - **Atalho das configurações:** opcional, em Configurações > Ativação.
 - **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral). As animações rodam na taxa do seu monitor (120, 144, 240 Hz…).
 - **Vozes naturais do MouseIA:** voz feminina e masculina com som humano, offline (português, inglês, espanhol, francês, italiano e hindi).
@@ -70,7 +72,7 @@ Baixe o `MouseIA-Setup.exe` na página de **Releases** e instale. Não precisa s
 Também há a versão **portátil** (`MouseIA-Portable.exe`), que roda sem instalar.
 
 **Atualizações automáticas:** o MouseIA confere o GitHub e se atualiza sozinho (Configurações > Atualizações).
-Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.4.0`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
+Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.4.1`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
 
 Requer Windows 10 (versão 2004) ou mais novo, 64 bits.
 

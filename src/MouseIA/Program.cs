@@ -28,9 +28,16 @@ internal static class Program
             // Set to run as administrator: start that way (Windows asks), or carry on normally if refused.
             try
             {
-                var settings = AppSettings.Load(System.IO.Path.Combine(AppSettings.DefaultFolder, "settings.json"), new DpapiProtector());
-                if (settings.RunAsAdmin && !args.Contains("--no-admin") &&
-                    Elevation.Relaunch("--after", Environment.ProcessId.ToString())) return 0;
+                var path = System.IO.Path.Combine(AppSettings.DefaultFolder, "settings.json");
+                var protector = new DpapiProtector();
+                var settings = AppSettings.Load(path, protector);
+                if (settings.RunAsAdmin && !args.Contains("--no-admin"))
+                {
+                    if (Elevation.Relaunch("--after", Environment.ProcessId.ToString())) return 0;
+                    // Refused: don't ask at every start. It can be turned on again in Settings > Activation.
+                    settings.RunAsAdmin = false;
+                    settings.Save(path, protector);
+                }
             }
             catch (Exception ex) { Log.Write("Admin start: " + ex.Message); }
         }

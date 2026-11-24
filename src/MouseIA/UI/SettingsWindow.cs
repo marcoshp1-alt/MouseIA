@@ -126,6 +126,7 @@ internal sealed class SettingsWindow : Window
             ["voice"] = VoicePage,
             ["general"] = GeneralPage,
             ["updates"] = UpdatesPage,
+            ["installed"] = InstalledPage,
             ["about"] = AboutPage,
         };
         // Fresh containers: the old ones still belong to the previous layout.
@@ -156,6 +157,7 @@ internal sealed class SettingsWindow : Window
         AddNav("voice", Theme.Glyph.Globe, Loc.T("nav_voice"));
         AddNav("general", Theme.Glyph.Settings, Loc.T("nav_general"));
         AddNav("updates", "\uE895", Loc.T("nav_updates"));
+        AddNav("installed", "\uE7B8", Loc.T("nav_installed"));
         AddNav("about", Theme.Glyph.Heart, Loc.T("nav_about"));
 
         var sidebar = new DockPanel { Width = 220, Background = Theme.B("#0AFFFFFF") };
@@ -543,7 +545,7 @@ internal sealed class SettingsWindow : Window
 
     private FrameworkElement ServerDetails()
     {
-        var url = new GlassField("http://127.0.0.1:11434/v1", _draft.LocalUrl);
+        var url = new GlassField(Loc.T("server_address_hint"), _draft.LocalUrl);
         url.Box.TextChanged += (_, _) => { _draft.LocalUrl = url.Text.Trim(); Changed(); };
         var model = new Picker(Array.Empty<Picker.Item>(), _draft.LocalModel);
         if (string.IsNullOrEmpty(_draft.LocalModel)) model.SetPlaceholder(Loc.T("pick_model"));
@@ -923,6 +925,38 @@ internal sealed class SettingsWindow : Window
     }
 
     /// <summary>The ready-to-download list: the best local models, one click each.</summary>
+    /// <summary>Live translation is still being tested: shown greyed out and locked, marked beta.</summary>
+    private FrameworkElement LiveTranslationBeta()
+    {
+        var title = new StackPanel { Orientation = Orientation.Horizontal };
+        var warn = Ui.Icon(Theme.Glyph.Warning, 13, Theme.B("#F5B841"));
+        warn.Margin = new Thickness(0, 1, 8, 0);
+        warn.VerticalAlignment = VerticalAlignment.Center;
+        title.Children.Add(warn);
+        title.Children.Add(Ui.Label(Loc.T("live_mode"), 14, Theme.Text, FontWeights.SemiBold));
+        title.Children.Add(new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Background = Theme.B("#33F5B841"),
+            Padding = new Thickness(8, 1, 8, 2),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = Ui.Label(Loc.T("beta_badge"), 11, Theme.B("#F5B841"), FontWeights.SemiBold),
+        });
+        var help = Ui.Label(Loc.T("live_mode_beta"), 12, Theme.Muted);
+        help.TextWrapping = TextWrapping.Wrap;
+        help.Margin = new Thickness(0, 3, 0, 0);
+        var text = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+        text.Children.Add(title);
+        text.Children.Add(help);
+        var toggle = new ToggleSwitch(false) { IsEnabled = false, VerticalAlignment = VerticalAlignment.Center };
+        var row = new DockPanel { Opacity = 0.55, Margin = new Thickness(0, 12, 0, 0), ToolTip = Loc.T("beta_tip") };
+        DockPanel.SetDock(toggle, Dock.Right);
+        row.Children.Add(toggle);
+        row.Children.Add(text);
+        return row;
+    }
+
     private string _modelTab = "recommended";
 
     private FrameworkElement DownloadDetails(Action showFiles)
@@ -1473,7 +1507,7 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(Section(
             Field(Loc.T("translate_to"), Loc.T("translate_to_help"), target),
             ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => { _draft.SpeakTranslation = v; Changed(); }),
-            ToggleRow(Loc.T("live_mode"), Loc.T("live_mode_help"), _draft.LiveTranslate, v => { _draft.LiveTranslate = v; Changed(); })));
+            LiveTranslationBeta()));
         page.Children.Add(Section(
             Field(Loc.T("voice"), Loc.T("voice_help"), voiceBlock),
             Field(Loc.T("voice_rate"), null, rate),
@@ -1652,6 +1686,150 @@ internal sealed class SettingsWindow : Window
         return page;
     }
 
+    // ---- everything MouseIA installed, with a way to remove each ----
+
+    private FrameworkElement InstalledPage()
+    {
+        var page = Page(Loc.T("nav_installed"), Loc.T("installed_subtitle"));
+        var body = new StackPanel();
+        page.Children.Add(body);
+        void Build()
+        {
+            body.Children.Clear();
+
+            // API keys
+            var keys = new StackPanel();
+            foreach (var (id, name) in new[] { (ProviderIds.Gemini, "Gemini"), (ProviderIds.OpenAi, "ChatGPT (OpenAI)"), (ProviderIds.Claude, "Claude"), (ProviderIds.Grok, "Grok") })
+            {
+                bool saved = !string.IsNullOrWhiteSpace(_draft.KeyFor(id));
+                var provider = id;
+                keys.Children.Add(InstalledRow(name, saved ? Loc.T("key_saved") : Loc.T("key_none"), null,
+                    saved ? Loc.T("remove_key") : null, () =>
+                    {
+                        switch (provider)
+                        {
+                            case ProviderIds.Gemini: _draft.GeminiKey = ""; break;
+                            case ProviderIds.OpenAi: _draft.OpenAiKey = ""; break;
+                            case ProviderIds.Claude: _draft.ClaudeKey = ""; break;
+                            case ProviderIds.Grok: _draft.GrokKey = ""; break;
+                        }
+                        Changed();
+                        Build();
+                    }));
+            }
+            body.Children.Add(Section(Field(Loc.T("inst_keys"), Loc.T("inst_keys_help"), keys)));
+
+            // Local AI models + cache
+            var models = new StackPanel();
+            var installed = ModelLibrary.InstalledModels(_draft.LocalModelFile);
+            if (installed.Count == 0) models.Children.Add(Ui.Label(Loc.T("inst_nothing"), 12.5, Theme.Faint));
+            foreach (var model in installed)
+            {
+                var m = model;
+                models.Children.Add(InstalledRow(m.Name, ModelLibrary.FormatSize(m.Size), System.IO.Path.GetDirectoryName(m.Path),
+                    Loc.T("model_delete"), () =>
+                    {
+                        if (!ConfirmDelete(m)) return;
+                        if (SamePath(m.Path, _draft.LocalModelFile)) { _draft.LocalModelFile = ""; _draft.LocalMmproj = ""; Changed(); }
+                        Build();
+                    }));
+            }
+            var cacheFiles = ModelLibrary.AllCacheFiles();
+            long cacheSize = ModelLibrary.SizeOf(cacheFiles);
+            models.Children.Add(InstalledRow(Loc.T("inst_cache"), ModelLibrary.FormatSize(cacheSize), LocalEngine.CacheFolder,
+                cacheFiles.Count > 0 ? Loc.T("clean_cache_confirm") : null, () =>
+                {
+                    var (ok, _) = ConfirmDialog.Ask(this, Loc.T("clean_cache_title"),
+                        Loc.Format("clean_cache_message", cacheFiles.Count, ModelLibrary.FormatSize(cacheSize), LocalEngine.CacheFolder),
+                        Loc.T("clean_cache_confirm"));
+                    if (!ok) return;
+                    LocalEngine.Stop();
+                    ModelLibrary.Delete(cacheFiles);
+                    Build();
+                }));
+            body.Children.Add(Section(Field(Loc.T("inst_models"), Loc.T("inst_models_help"), models)));
+
+            // Engine
+            long engineSize = Cleanup.FolderSize(LocalEngine.EnginesFolder);
+            body.Children.Add(Section(InstalledRow(Loc.T("inst_engine"),
+                engineSize > 0 ? ModelLibrary.FormatSize(engineSize) : Loc.T("inst_not_installed"), LocalEngine.EnginesFolder,
+                engineSize > 0 ? Loc.T("uninstall") : null, () =>
+                {
+                    var (ok, _) = ConfirmDialog.Ask(this, Loc.T("inst_engine"),
+                        Loc.Format("uninstall_message", Loc.T("inst_engine"), ModelLibrary.FormatSize(engineSize), LocalEngine.EnginesFolder) + "\n\n" + Loc.T("inst_engine_note"),
+                        Loc.T("uninstall"));
+                    if (!ok) return;
+                    LocalEngine.Stop();
+                    Finish(Cleanup.DeleteFolder(LocalEngine.EnginesFolder));
+                })));
+
+            // Natural voices
+            long voicesSize = Cleanup.FolderSize(NeuralVoices.Folder);
+            body.Children.Add(Section(InstalledRow(Loc.T("neural_voices"),
+                voicesSize > 0 ? ModelLibrary.FormatSize(voicesSize) : Loc.T("inst_not_installed"), NeuralVoices.Folder,
+                voicesSize > 0 ? Loc.T("uninstall") : null, () =>
+                {
+                    var (ok, _) = ConfirmDialog.Ask(this, Loc.T("neural_voices"),
+                        Loc.Format("uninstall_message", Loc.T("neural_voices"), ModelLibrary.FormatSize(voicesSize), NeuralVoices.Folder) + "\n\n" + Loc.T("inst_voices_note"),
+                        Loc.T("uninstall"));
+                    if (!ok) return;
+                    SpeechService.Stop();
+                    // Otherwise they'd download again by themselves.
+                    _draft.NaturalVoices = false;
+                    if (_draft.VoiceId.StartsWith("kokoro:", StringComparison.Ordinal)) _draft.VoiceId = "auto";
+                    Changed();
+                    Finish(Cleanup.DeleteFolder(NeuralVoices.Folder));
+                })));
+
+            // Settings and the app itself
+            var data = InstalledRow(Loc.T("inst_data"), ModelLibrary.FormatSize(Cleanup.FolderSize(AppSettings.DefaultFolder)), AppSettings.DefaultFolder, null, null);
+            var appNote = Ui.Label(Loc.T(Services.Updater.IsInstalled ? "inst_app_installed" : "inst_app_portable"), 12, Theme.Muted);
+            appNote.TextWrapping = TextWrapping.Wrap;
+            appNote.Margin = new Thickness(0, 6, 0, 0);
+            body.Children.Add(Section(data, appNote));
+        }
+        void Finish(bool allGone)
+        {
+            Build();
+            if (!allGone) ConfirmDialog.Ask(this, Loc.T("delete_failed_title"), Loc.T("inst_next_start"), "OK");
+        }
+        Build();
+        return page;
+    }
+
+    /// <summary>One thing on the computer: name, size or state, where it is, and a remove button.</summary>
+    private FrameworkElement InstalledRow(string name, string detail, string? folder, string? action, Action? onAction)
+    {
+        var text = new StackPanel { Margin = new Thickness(0, 0, 10, 0) };
+        text.Children.Add(Ui.Label(name, 13.5, Theme.Text, FontWeights.SemiBold));
+        text.Children.Add(Ui.Label(detail, 12, Theme.Muted));
+        if (folder != null)
+        {
+            var path = Ui.Label(folder, 11.5, Theme.Faint);
+            path.TextTrimming = TextTrimming.CharacterEllipsis;
+            path.ToolTip = folder;
+            text.Children.Add(path);
+        }
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        if (folder != null && (System.IO.Directory.Exists(folder)))
+        {
+            var open = new IconButton(Theme.Glyph.Folder, Loc.T("open_folder"), 32, 11);
+            open.Click += () => OpenUrl(folder);
+            actions.Children.Add(open);
+        }
+        if (action != null && onAction != null)
+        {
+            var remove = new SecondaryButton(action, Theme.Glyph.Delete) { Height = 30, Margin = new Thickness(6, 0, 0, 0) };
+            remove.Click += onAction;
+            actions.Children.Add(remove);
+        }
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+        DockPanel.SetDock(actions, Dock.Right);
+        row.Children.Add(actions);
+        row.Children.Add(text);
+        return row;
+    }
+
     private FrameworkElement AboutPage()
     {
         var page = Page("MouseIA", Loc.Format("version", Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0"));
@@ -1664,6 +1842,18 @@ internal sealed class SettingsWindow : Window
                   ("GitHub", "https://github.com/odorizzioficial"),
                   ("Instagram", "https://www.instagram.com/odorizzidicas"),
                   ("TikTok", "https://www.tiktok.com/@odorizzioficial"))));
+
+        // Privacy and security, in plain words.
+        var privacy = new StackPanel();
+        foreach (var key in new[] { "privacy_1", "privacy_2", "privacy_3", "privacy_4", "privacy_5", "privacy_6" })
+        {
+            var line = Ui.Label("•  " + Loc.T(key), 12.5, Theme.Text);
+            line.TextWrapping = TextWrapping.Wrap;
+            line.Margin = new Thickness(0, 0, 0, 7);
+            privacy.Children.Add(line);
+        }
+        privacy.Children.Add(Links((Loc.T("privacy_source"), "https://github.com/" + Core.UpdateInfo.Repository)));
+        page.Children.Add(Section(Field(Loc.T("privacy_title"), Loc.T("privacy_subtitle"), privacy)));
         var quit = new SecondaryButton(Loc.T("quit"), Theme.Glyph.Power);
         quit.Click += () => _app.Exit();
         page.Children.Add(quit);

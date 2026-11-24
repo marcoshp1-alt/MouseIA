@@ -121,7 +121,7 @@ internal sealed class InlineTranslation : Canvas
         _buttons.Children.Add(copy);
         _buttons.Children.Add(listen);
         _buttons.Children.Add(original);
-        _buttons.Children.Add(live);
+        // Live translation is in beta: the ▶ button comes back when it's ready.
         var close = ToolButton(Theme.Glyph.Close, Loc.T("close"));
         close.Click += Remove;
         var row = new StackPanel { Orientation = Orientation.Horizontal };
