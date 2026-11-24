@@ -12,7 +12,56 @@ internal static class StartupRegistration
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "MouseIA";
 
-    public static void Apply(bool enabled)
+    private const string TaskName = "MouseIA";
+
+    /// <summary>
+    /// Start with Windows. As administrator this uses a scheduled task "with highest privileges",
+    /// so Windows doesn't ask for permission at every sign-in.
+    /// </summary>
+    public static void Apply(bool enabled, bool admin = false)
+    {
+        bool useTask = enabled && admin && Elevation.IsSelfElevated;
+        if (useTask && Environment.ProcessPath is { } path)
+        {
+            if (RunSchtasks("/Create", "/F", "/TN", TaskName, "/SC", "ONLOGON", "/RL", "HIGHEST", "/IT",
+                    "/TR", $"\"{path}\" --tray"))
+            {
+                ApplyRunKey(false);
+                return;
+            }
+        }
+        else if (Elevation.IsSelfElevated || !enabled || !admin)
+        {
+            RunSchtasks("/Delete", "/F", "/TN", TaskName);
+        }
+        ApplyRunKey(enabled);
+    }
+
+    private static bool RunSchtasks(params string[] args)
+    {
+        try
+        {
+            var info = new System.Diagnostics.ProcessStartInfo("schtasks.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var arg in args) info.ArgumentList.Add(arg);
+            using var process = System.Diagnostics.Process.Start(info);
+            if (process == null) return false;
+            process.WaitForExit(10000);
+            return process.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("schtasks: " + ex.Message);
+            return false;
+        }
+    }
+
+    private static void ApplyRunKey(bool enabled)
     {
         try
         {

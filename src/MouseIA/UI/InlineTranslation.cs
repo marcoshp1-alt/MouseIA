@@ -68,7 +68,7 @@ internal sealed class InlineTranslation : Canvas
         var pixels = ImageUtil.ToBgra(image, out int w, out int h);
         foreach (var block in blocks.Where(b => Prompts.IsTranslatable(b.Text)))
         {
-            var (bg, fg) = Colors(pixels, w, h, block);
+            var (bg, fg) = TextPaint.Colors(pixels, w, h, block);
             var area = new Rect(imageArea.X + block.X / scale, imageArea.Y + block.Y / scale, block.Width / scale, block.Height / scale);
             _pieces.Add(new Piece { Box = block, Area = area, Background = bg, Foreground = fg });
         }
@@ -115,9 +115,13 @@ internal sealed class InlineTranslation : Canvas
         listen.Click += () => _ = SpeakAsync();
         var original = ToolButton(Theme.Glyph.Text, Loc.T("show_original"));
         original.Click += ToggleOriginal;
+        // Live: keep this whole window translated while you use it.
+        var live = ToolButton(Theme.Glyph.Play, Loc.T("live_here"));
+        live.Click += () => _host.StartLiveHere(_selection);
         _buttons.Children.Add(copy);
         _buttons.Children.Add(listen);
         _buttons.Children.Add(original);
+        _buttons.Children.Add(live);
         var close = ToolButton(Theme.Glyph.Close, Loc.T("close"));
         close.Click += Remove;
         var row = new StackPanel { Orientation = Orientation.Horizontal };
@@ -162,54 +166,6 @@ internal sealed class InlineTranslation : Canvas
     }
 
     // ---- colours ----
-
-    /// <summary>The background around a piece of text (median of a thin ring outside it) and the text colour.</summary>
-    private static (Color Background, Color Foreground) Colors(byte[] px, int w, int h, OcrBox box)
-    {
-        int x0 = (int)Math.Floor(box.X), y0 = (int)Math.Floor(box.Y);
-        int x1 = (int)Math.Ceiling(box.Right), y1 = (int)Math.Ceiling(box.Bottom);
-        var ring = new List<(byte B, byte G, byte R)>();
-        void Take(int x, int y)
-        {
-            if (x < 0 || y < 0 || x >= w || y >= h) return;
-            int i = (y * w + x) * 4;
-            ring.Add((px[i], px[i + 1], px[i + 2]));
-        }
-        for (int d = 2; d <= 4; d += 2)
-        {
-            for (int x = x0 - d; x <= x1 + d; x += 2) { Take(x, y0 - d); Take(x, y1 + d); }
-            for (int y = y0 - d; y <= y1 + d; y += 2) { Take(x0 - d, y); Take(x1 + d, y); }
-        }
-        if (ring.Count == 0) return (Color.FromRgb(30, 30, 30), System.Windows.Media.Colors.White);
-        byte Median(Func<(byte B, byte G, byte R), byte> pick)
-        {
-            var values = ring.Select(pick).OrderBy(v => v).ToList();
-            return values[values.Count / 2];
-        }
-        var bg = Color.FromRgb(Median(p => p.R), Median(p => p.G), Median(p => p.B));
-
-        // The text colour: the pixels inside that differ most from the background.
-        var far = new List<(int Dist, byte R, byte G, byte B)>();
-        int step = Math.Max(1, (int)Math.Sqrt(Math.Max(1.0, (x1 - x0) * (double)(y1 - y0) / 4000)));
-        for (int y = Math.Max(0, y0); y < Math.Min(h, y1); y += step)
-            for (int x = Math.Max(0, x0); x < Math.Min(w, x1); x += step)
-            {
-                int i = (y * w + x) * 4;
-                int dist = Math.Abs(px[i + 2] - bg.R) + Math.Abs(px[i + 1] - bg.G) + Math.Abs(px[i] - bg.B);
-                if (dist > 90) far.Add((dist, px[i + 2], px[i + 1], px[i]));
-            }
-        Color fg;
-        if (far.Count >= 4)
-        {
-            var top = far.OrderByDescending(f => f.Dist).Take(Math.Max(3, far.Count / 3)).ToList();
-            fg = Color.FromRgb((byte)top.Average(t => t.R), (byte)top.Average(t => t.G), (byte)top.Average(t => t.B));
-        }
-        else fg = Luma(bg) > 0.5 ? Color.FromRgb(20, 20, 20) : System.Windows.Media.Colors.White;
-        if (Math.Abs(Luma(fg) - Luma(bg)) < 0.3) fg = Luma(bg) > 0.5 ? Color.FromRgb(20, 20, 20) : System.Windows.Media.Colors.White;
-        return (bg, fg);
-    }
-
-    private static double Luma(Color c) => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
 
     // ---- translating ----
 
@@ -286,54 +242,8 @@ internal sealed class InlineTranslation : Canvas
         Ui.Fade(piece.View, 1, 220);
     }
 
-    /// <summary>The translated text over its own background, sized to sit where the original was.</summary>
-    private Border BuildView(Piece piece)
-    {
-        var area = piece.Area;
-        double lineHeight = area.Height / Math.Max(1, piece.Box.Lines);
-        double baseSize = Math.Clamp(lineHeight * 0.92, 9, 64);
-        bool singleLine = piece.Box.Lines <= 1;
-        var text = new TextBlock
-        {
-            Text = piece.Translation,
-            FontFamily = Theme.Font,
-            Foreground = new SolidColorBrush(piece.Foreground),
-            TextWrapping = singleLine ? TextWrapping.NoWrap : TextWrapping.Wrap,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.None,
-        };
-        double width = area.Width + 4, height = area.Height + 4;
-        double size = baseSize;
-        double min = baseSize * (singleLine ? 0.72 : 0.6);
-        while (true)
-        {
-            text.FontSize = size;
-            text.Measure(new Size(singleLine ? double.PositiveInfinity : width - 4, double.PositiveInfinity));
-            bool fits = singleLine ? text.DesiredSize.Width <= width - 4 : text.DesiredSize.Height <= height - 2;
-            if (fits || size <= min) break;
-            size = Math.Max(min, size - 0.5);
-        }
-        // Still too big at the smallest readable size: let the background grow instead.
-        if (singleLine) width = Math.Max(width, text.DesiredSize.Width + 6);
-        else height = Math.Max(height, text.DesiredSize.Height + 4);
-
-        double x = area.X - 2, y = area.Y - 2;
-        if (x + width > Width - 2) x = Math.Max(2, Width - 2 - width);
-        if (y + height > Height - 2) y = Math.Max(2, Height - 2 - height);
-        var view = new Border
-        {
-            Width = width,
-            Height = height,
-            CornerRadius = new CornerRadius(3),
-            Background = new SolidColorBrush(piece.Background),
-            Padding = new Thickness(2, 0, 2, 0),
-            Child = text,
-            IsHitTestVisible = false,
-        };
-        SetLeft(view, x);
-        SetTop(view, y);
-        return view;
-    }
+    private Border BuildView(Piece piece) =>
+        TextPaint.View(piece.Translation ?? "", piece.Area, piece.Box.Lines, piece.Background, piece.Foreground, Width, Height);
 
     private void StopShimmer()
     {
@@ -371,8 +281,12 @@ internal sealed class InlineTranslation : Canvas
         StopShimmer();
     }
 
+    /// <summary>Raised when the user closes it.</summary>
+    public event Action? Removed;
+
     public void Remove()
     {
+        Removed?.Invoke();
         Cancel();
         Ui.Fade(this, 0, 140, () => (Parent as Panel)?.Children.Remove(this));
     }

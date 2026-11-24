@@ -30,6 +30,9 @@ Mais coisas:
 - **Digite direto:** com o MouseIA aberto, comece a digitar para perguntar sem selecionar nada.
 - **Várias seleções:** o botão **+** junta outra área da tela na mesma pergunta.
 - **Ditado:** o 🎤 no campo de texto transforma sua fala em pergunta.
+- **Tradução ao vivo:** traduz em tempo real a janela que estiver na frente (ou só uma janela, pelo botão ▶ depois de traduzir), por cima do texto, enquanto você usa. Ligue em Configurações > Tradutor e voz.
+- **10 idiomas no app:** inglês, chinês, hindi, espanhol, árabe, bengali, francês, português, russo e urdu.
+- **Apps de administrador:** ative "Funcionar também em apps de administrador" para o balanço funcionar sobre eles.
 - **Atalho das configurações:** opcional, em Configurações > Ativação.
 - **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral). As animações rodam na taxa do seu monitor (120, 144, 240 Hz…).
 - **Vozes naturais do MouseIA:** voz feminina e masculina com som humano, offline (português, inglês, espanhol, francês, italiano e hindi).
@@ -52,7 +55,9 @@ Em **Configurações > Inteligência artificial**:
     **LiteRT-LM** (com Python próprio) para `.litertlm`. Usa a placa de vídeo ou o processador.
     Para perguntar sobre imagens, baixe também o arquivo **mmproj** do mesmo modelo na mesma pasta.
     O cache do LiteRT-LM fica em **Documentos\MouseIA Cache\<nome do PC>**, e não ao lado do modelo.
-  - **Baixar IAs**: uma lista com as 10 melhores IAs locais (Gemma 4 e Qwen3.5, de 0,5 a 15 GB), um clique baixa e já deixa em uso.
+  - Antes de tudo, o MouseIA instala o **motor** (llama.cpp e LiteRT-LM) numa pasta própria, com um clique.
+  - **Baixar IAs**: as 10 melhores IAs locais (Gemma 4 e Qwen3.5) separadas por categoria (Recomendado, PC fraco, PC médio, PC super forte),
+    com os requisitos no (i) e o link da página oficial de cada uma. Um clique baixa e já deixa em uso.
     Em **Suas IAs** dá para trocar de modelo, apagar (com o cache junto, se quiser) e limpar o cache.
   - **Servidor**: Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan… O botão **Detectar** encontra e lista os modelos.
 
@@ -65,7 +70,7 @@ Baixe o `MouseIA-Setup.exe` na página de **Releases** e instale. Não precisa s
 Também há a versão **portátil** (`MouseIA-Portable.exe`), que roda sem instalar.
 
 **Atualizações automáticas:** o MouseIA confere o GitHub e se atualiza sozinho (Configurações > Atualizações).
-Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.3.3`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
+Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.4.0`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
 
 Requer Windows 10 (versão 2004) ou mais novo, 64 bits.
 

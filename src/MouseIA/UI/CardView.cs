@@ -72,6 +72,7 @@ internal sealed class CardView : Grid
         _host = host;
         _settings = settings;
         Width = CardWidth;
+        if (Loc.IsRightToLeft) FlowDirection = FlowDirection.RightToLeft;
         UseLayoutRounding = true;
         AllowDrop = true;
 
@@ -101,6 +102,7 @@ internal sealed class CardView : Grid
         RenderOptions.SetBitmapScalingMode(_backdrop, BitmapScalingMode.HighQuality);
         // In a Canvas the full-screen backdrop doesn't take part in the card's size.
         var backdropHost = new Canvas { ClipToBounds = true };
+        backdropHost.FlowDirection = FlowDirection.LeftToRight; // the glass lines up with the screen even in right-to-left languages
         backdropHost.Children.Add(_backdrop);
         _glass = new Grid { Clip = _clip, ClipToBounds = true };
         _glass.Children.Add(backdropHost);

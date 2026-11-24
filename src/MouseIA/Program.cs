@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using MouseIA.Core;
 using MouseIA.Native;
 
 namespace MouseIA;
@@ -15,6 +16,25 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Restarted by the previous instance (e.g. to run as administrator): let it finish closing first.
+        int afterIndex = Array.IndexOf(args, "--after");
+        if (afterIndex >= 0 && afterIndex + 1 < args.Length && int.TryParse(args[afterIndex + 1], out int previous))
+        {
+            try { System.Diagnostics.Process.GetProcessById(previous).WaitForExit(8000); }
+            catch (ArgumentException) { }
+        }
+        else if (!Elevation.IsSelfElevated)
+        {
+            // Set to run as administrator: start that way (Windows asks), or carry on normally if refused.
+            try
+            {
+                var settings = AppSettings.Load(System.IO.Path.Combine(AppSettings.DefaultFolder, "settings.json"), new DpapiProtector());
+                if (settings.RunAsAdmin && !args.Contains("--no-admin") &&
+                    Elevation.Relaunch("--after", Environment.ProcessId.ToString())) return 0;
+            }
+            catch (Exception ex) { Log.Write("Admin start: " + ex.Message); }
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool first);
         if (!first)
         {

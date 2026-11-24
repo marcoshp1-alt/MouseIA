@@ -15,7 +15,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\MouseIA.ico</ApplicationIcon>
 
-    <Version>1.3.3</Version>
+    <Version>1.4.0</Version>
     <Product>MouseIA</Product>
     <Company>Odorizzi</Company>
     <Authors>Odorizzi</Authors>
@@ -42,4 +42,7 @@
     <None Remove="Assets\*.png" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Lang\*.json" LogicalName="MouseIA.Lang.%(Filename).json" />
+  </ItemGroup>
 </Project>

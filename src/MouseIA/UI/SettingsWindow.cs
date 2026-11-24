@@ -117,6 +117,8 @@ internal sealed class SettingsWindow : Window
     private void BuildUi()
     {
         Title = Loc.T("settings_title");
+        // Arabic and Urdu read right to left.
+        _surface.FlowDirection = Loc.IsRightToLeft ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
         _pages = new()
         {
             ["ai"] = AiPage,
@@ -655,6 +657,37 @@ internal sealed class SettingsWindow : Window
     {
         var holder = new StackPanel();
         var content = new ContentControl();
+        // Step 1: the engine. Choosing or downloading a model only makes sense once it's installed.
+        if (!LocalEngine.EnginesReady)
+        {
+            var status = Ui.Label(Loc.T("engine_step_help"), 12.5, Theme.Muted);
+            status.TextWrapping = TextWrapping.Wrap;
+            status.Margin = new Thickness(0, 0, 0, 10);
+            var install = new PrimaryButton(Loc.T("engine_install"), Theme.Glyph.Add) { HorizontalAlignment = HorizontalAlignment.Left };
+            install.Click += async () =>
+            {
+                install.IsEnabled = false;
+                var progress = new Progress<string>(p => { status.Foreground = Theme.Muted; status.Text = p; });
+                try
+                {
+                    await Task.Run(() => LocalEngine.InstallEnginesAsync(progress, CancellationToken.None));
+                    // Ready: show the model choices.
+                    if (holder.Parent is ContentControl host) host.Content = LocalPanel();
+                }
+                catch (Exception ex)
+                {
+                    status.Foreground = Theme.Danger;
+                    status.Text = Loc.Format("engine_install_failed", ex.Message);
+                    install.IsEnabled = true;
+                }
+            };
+            var step = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
+            step.Children.Add(Ui.Label(Loc.T("engine_step"), 14, Theme.Text, FontWeights.SemiBold));
+            step.Children.Add(status);
+            step.Children.Add(install);
+            holder.Children.Add(step);
+        }
+
         // "Download" is just a place to get models; the saved mode stays file or server.
         var mode = new Segmented(new[]
         {
@@ -663,12 +696,22 @@ internal sealed class SettingsWindow : Window
             ("server", Loc.T("local_mode_server")),
         }, _draft.LocalMode);
         mode.Margin = new Thickness(0, 0, 0, 14);
-        FrameworkElement Show(string m) => m switch
+        FrameworkElement Show(string m)
         {
-            "server" => ServerDetails(),
-            "download" => DownloadDetails(() => mode.Selected = "file"),
-            _ => FileDetails(),
-        };
+            FrameworkElement page = m switch
+            {
+                "server" => ServerDetails(),
+                "download" => DownloadDetails(() => mode.Selected = "file"),
+                _ => FileDetails(),
+            };
+            // Without the engine, models can be looked at but not chosen yet (a server doesn't need it).
+            if (m != "server" && !LocalEngine.EnginesReady)
+            {
+                page.IsEnabled = false;
+                page.Opacity = 0.45;
+            }
+            return page;
+        }
         mode.Changed += m =>
         {
             if (m != "download")
@@ -880,55 +923,124 @@ internal sealed class SettingsWindow : Window
     }
 
     /// <summary>The ready-to-download list: the best local models, one click each.</summary>
+    private string _modelTab = "recommended";
+
     private FrameworkElement DownloadDetails(Action showFiles)
     {
         var list = new StackPanel();
         var rows = new List<(ModelLibrary.Entry Entry, StackPanel Actions, TextBlock Status)>();
-        foreach (var entry in ModelLibrary.Catalog)
+        var shown = new Dictionary<string, string>();
+
+        // ---- category tabs, side by side, each with an (i) showing what computer it needs ----
+        var tabs = new WrapPanel { Margin = new Thickness(0, 0, 0, 14) };
+        var tabButtons = new List<(string Id, Clickable Button, TextBlock Label)>();
+        void PaintTabs()
         {
-            var title = new StackPanel { Orientation = Orientation.Horizontal };
-            title.Children.Add(Ui.Label(entry.Name, 14, Theme.Text, FontWeights.SemiBold));
-            if (entry.Recommended)
+            foreach (var (id, button, label) in tabButtons)
             {
-                var badge = new Border
-                {
-                    CornerRadius = new CornerRadius(8),
-                    Background = Theme.AccentSoft,
-                    Padding = new Thickness(8, 1, 8, 2),
-                    Margin = new Thickness(8, 0, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Child = Ui.Label(Loc.T("recommended"), 11, Theme.Text, FontWeights.SemiBold),
-                };
-                title.Children.Add(badge);
+                bool on = id == _modelTab;
+                button.NormalBrush = on ? Theme.Accent : Theme.Field;
+                button.HoverBrush = on ? Theme.Accent : Theme.Hover;
+                label.Foreground = on ? Brushes.White : Theme.Muted;
+                label.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
             }
-            var detail = Ui.Label(entry.Detail, 12, Theme.Muted);
-            detail.TextWrapping = TextWrapping.Wrap;
-            var status = Ui.Label($"{ModelLibrary.FormatSize(entry.TotalSize)} · {entry.Engine}", 11.5, Theme.Faint);
-            var text = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
-            text.Children.Add(title);
-            text.Children.Add(detail);
-            text.Children.Add(status);
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 14) };
-            DockPanel.SetDock(actions, Dock.Right);
-            row.Children.Add(actions);
-            row.Children.Add(text);
-            list.Children.Add(row);
-            rows.Add((entry, actions, status));
+        }
+        foreach (var category in ModelLibrary.CategoryIds)
+        {
+            var label = Ui.Label(Loc.T("cat_" + category), 12.5);
+            label.VerticalAlignment = VerticalAlignment.Center;
+            var info = Ui.Icon(Theme.Glyph.Info, 12, Theme.Muted);
+            info.Margin = new Thickness(7, 1, 0, 0);
+            info.VerticalAlignment = VerticalAlignment.Center;
+            info.Cursor = Cursors.Help;
+            info.ToolTip = new ToolTip
+            {
+                Content = new TextBlock { Text = Loc.T("req_" + category), TextWrapping = TextWrapping.Wrap, MaxWidth = 340 },
+            };
+            ToolTipService.SetInitialShowDelay(info, 80);
+            ToolTipService.SetShowDuration(info, 60000);
+            var content = new StackPanel { Orientation = Orientation.Horizontal };
+            content.Children.Add(label);
+            content.Children.Add(info);
+            var button = new Clickable
+            {
+                CornerRadius = new CornerRadius(16),
+                Padding = new Thickness(14, 6, 12, 7),
+                Margin = new Thickness(0, 0, 8, 8),
+                BorderBrush = Theme.FieldStroke,
+                BorderThickness = new Thickness(1),
+                Child = content,
+            };
+            var id = category;
+            button.Click += () =>
+            {
+                _modelTab = id;
+                PaintTabs();
+                Fill();
+            };
+            tabButtons.Add((category, button, label));
+            tabs.Children.Add(button);
+        }
+        PaintTabs();
+
+        void Fill()
+        {
+            list.Children.Clear();
+            rows.Clear();
+            shown.Clear();
+            foreach (var entry in ModelLibrary.Catalog.Where(e => e.Categories.Contains(_modelTab)))
+            {
+                var title = new StackPanel { Orientation = Orientation.Horizontal };
+                title.Children.Add(Ui.Label(entry.Name, 14, Theme.Text, FontWeights.SemiBold));
+                if (entry.Recommended)
+                {
+                    title.Children.Add(new Border
+                    {
+                        CornerRadius = new CornerRadius(8),
+                        Background = Theme.AccentSoft,
+                        Padding = new Thickness(8, 1, 8, 2),
+                        Margin = new Thickness(8, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Child = Ui.Label(Loc.T("recommended"), 11, Theme.Text, FontWeights.SemiBold),
+                    });
+                }
+                // The paper clip opens the official page: the files come straight from there.
+                var page = new IconButton(Theme.Glyph.Link, Loc.Format("official_page", entry.Page.Replace("https://", "")), 26, 11)
+                {
+                    Margin = new Thickness(6, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                var url = entry.Page;
+                page.Click += () => OpenUrl(url);
+                title.Children.Add(page);
+                var detail = Ui.Label(entry.Detail, 12, Theme.Muted);
+                detail.TextWrapping = TextWrapping.Wrap;
+                var status = Ui.Label("", 11.5, Theme.Faint);
+                var text = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+                text.Children.Add(title);
+                text.Children.Add(detail);
+                text.Children.Add(status);
+                var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 14) };
+                DockPanel.SetDock(actions, Dock.Right);
+                row.Children.Add(actions);
+                row.Children.Add(text);
+                list.Children.Add(row);
+                rows.Add((entry, actions, status));
+            }
+            RefreshRows();
         }
 
         string Signature(ModelLibrary.Entry e) =>
             ModelLibrary.IsDownloading(e.Id) ? "d" : e.IsDownloaded ? (SamePath(_draft.LocalModelFile, e.ModelPath) ? "u" : "r") : "n";
-        var shown = new Dictionary<string, string>();
         void RefreshRows()
         {
             foreach (var (entry, actions, status) in rows)
             {
                 var sig = Signature(entry);
-                if (sig == "d")
-                    status.Text = Loc.Format("model_downloading", (int)Math.Round(ModelLibrary.ProgressOf(entry.Id) * 100), ModelLibrary.FormatSize(entry.TotalSize));
-                else
-                    status.Text = $"{ModelLibrary.FormatSize(entry.TotalSize)} · {entry.Engine}";
+                status.Text = sig == "d"
+                    ? Loc.Format("model_downloading", (int)Math.Round(ModelLibrary.ProgressOf(entry.Id) * 100), ModelLibrary.FormatSize(entry.TotalSize))
+                    : $"{ModelLibrary.FormatSize(entry.TotalSize)} · {entry.Engine}";
                 if (shown.TryGetValue(entry.Id, out var before) && before == sig) continue;
                 shown[entry.Id] = sig;
                 actions.Children.Clear();
@@ -970,7 +1082,7 @@ internal sealed class SettingsWindow : Window
                 }
             }
         }
-        RefreshRows();
+        Fill();
         var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         timer.Tick += (_, _) => RefreshRows();
         list.Loaded += (_, _) => timer.Start();
@@ -987,11 +1099,14 @@ internal sealed class SettingsWindow : Window
         footer.Children.Add(openFolder);
         footer.Children.Add(more);
 
+        var body = new StackPanel();
+        body.Children.Add(tabs);
+        body.Children.Add(list);
         return new StackPanel
         {
             Children =
             {
-                Section(Field(Loc.T("download_models"), Loc.T("download_models_help"), list)),
+                Section(Field(Loc.T("download_models"), Loc.T("download_models_help"), body)),
                 Section(footer),
             },
         };
@@ -1211,7 +1326,15 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(Section(
             ToggleRow(Loc.T("shake"), Loc.T("shake_help"), _draft.Shake, v => { _draft.Shake = v; Changed(); }),
             Field(Loc.T("sensitivity"), null, sensitivityBlock),
-            ToggleRow(Loc.T("fullscreen_off"), Loc.T("fullscreen_off_help"), _draft.DisableInFullscreen, v => { _draft.DisableInFullscreen = v; Changed(); })));
+            ToggleRow(Loc.T("fullscreen_off"), Loc.T("fullscreen_off_help"), _draft.DisableInFullscreen, v => { _draft.DisableInFullscreen = v; Changed(); }),
+            ToggleRow(Loc.T("run_as_admin"), Loc.T(Native.Elevation.IsSelfElevated ? "run_as_admin_on" : "run_as_admin_help"), _draft.RunAsAdmin, v =>
+            {
+                _draft.RunAsAdmin = v;
+                Changed();
+                if (!v || Native.Elevation.IsSelfElevated) return;
+                var (restart, _) = ConfirmDialog.Ask(this, Loc.T("run_as_admin"), Loc.T("run_as_admin_restart"), Loc.T("restart_now"));
+                if (restart) _app.RestartAsAdmin();
+            })));
         page.Children.Add(Section(
             ToggleRow(Loc.T("type_to_ask"), Loc.T("type_to_ask_help"), _draft.TypeToAsk, v => { _draft.TypeToAsk = v; Changed(); })));
 
@@ -1349,7 +1472,8 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(Section(
             Field(Loc.T("translate_to"), Loc.T("translate_to_help"), target),
-            ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => { _draft.SpeakTranslation = v; Changed(); })));
+            ToggleRow(Loc.T("speak_translation"), Loc.T("speak_translation_help"), _draft.SpeakTranslation, v => { _draft.SpeakTranslation = v; Changed(); }),
+            ToggleRow(Loc.T("live_mode"), Loc.T("live_mode_help"), _draft.LiveTranslate, v => { _draft.LiveTranslate = v; Changed(); })));
         page.Children.Add(Section(
             Field(Loc.T("voice"), Loc.T("voice_help"), voiceBlock),
             Field(Loc.T("voice_rate"), null, rate),
@@ -1363,7 +1487,10 @@ internal sealed class SettingsWindow : Window
     private FrameworkElement GeneralPage()
     {
         var page = Page(Loc.T("nav_general"), Loc.T("general_subtitle"));
-        var ui = new Segmented(new[] { ("auto", Loc.T("automatic")), ("pt", "Português"), ("en", "English") }, _draft.UiLanguage);
+        // The ten most spoken languages in the world, each written in itself.
+        var uiItems = new List<Picker.Item> { new("auto", Loc.T("automatic"), Loc.T("windows_language")) };
+        uiItems.AddRange(Loc.Languages.Select(l => new Picker.Item(l.Code, l.Name)));
+        var ui = new Picker(uiItems, _draft.UiLanguage, searchable: false) { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
         // The language switches right away: the whole window is rebuilt in it.
         ui.Changed += v =>
         {

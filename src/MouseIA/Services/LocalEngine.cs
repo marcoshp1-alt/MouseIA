@@ -186,6 +186,25 @@ internal static class LocalEngine
         throw new LocalEngineException(Loc.Format("engine_failed", Shorten(lastError)));
     }
 
+    /// <summary>Both engines ready: llama.cpp (for .gguf) and LiteRT-LM (for .litertlm).</summary>
+    public static bool EnginesReady =>
+        FindLiteRtCli() != null && (InstalledLlamaServer("vulkan") != null || InstalledLlamaServer("cpu") != null);
+
+    /// <summary>Installs whatever engine is missing (llama.cpp for the graphics card and the processor, and LiteRT-LM).</summary>
+    public static async Task InstallEnginesAsync(IProgress<string>? progress, CancellationToken ct)
+    {
+        foreach (var variant in new[] { "vulkan", "cpu" })
+        {
+            if (InstalledLlamaServer(variant) != null) continue;
+            try { await DownloadLlamaAsync(variant, progress, ct).ConfigureAwait(false); }
+            catch (Exception ex) when (variant == "vulkan" && ex is not OperationCanceledException)
+            {
+                Log.Write("llama vulkan install: " + ex.Message); // the processor version still covers it
+            }
+        }
+        if (FindLiteRtCli() == null) await InstallLiteRtAsync(progress, ct).ConfigureAwait(false);
+    }
+
     private static async Task<string> DownloadLlamaAsync(string variant, IProgress<string>? progress, CancellationToken ct)
     {
         progress?.Report(Loc.T("engine_finding"));

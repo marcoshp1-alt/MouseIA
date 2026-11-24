@@ -92,6 +92,10 @@ public sealed class AppSettings
     public double VoiceRate { get; set; } = 1.0;
     /// <summary>Use (and download once) MouseIA's own natural voices.</summary>
     public bool NaturalVoices { get; set; } = true;
+    /// <summary>Run as administrator, so the shake works over apps opened as administrator.</summary>
+    public bool RunAsAdmin { get; set; }
+    /// <summary>Live translation of whatever window is in front.</summary>
+    public bool LiveTranslate { get; set; }
     /// <summary>"auto" picks the best voice for each language (natural/neural first), or a voice id.</summary>
     public string VoiceId { get; set; } = "auto";
     public string VoiceInputLanguage { get; set; } = "auto";
@@ -106,7 +110,7 @@ public sealed class AppSettings
     public double GlassOpacity { get; set; } = 0.85;
 
     // General
-    public string UiLanguage { get; set; } = "auto"; // auto | pt | en
+    public string UiLanguage { get; set; } = "auto"; // auto or a language code (see Loc.Languages)
     public bool StartWithWindows { get; set; } = true;
     public bool FirstRunDone { get; set; }
 

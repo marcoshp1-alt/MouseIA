@@ -43,6 +43,9 @@ internal sealed class OverlayWindow : Window
     private bool _dragging;
     private readonly List<FrameworkElement> _layers = new();
     private bool _acted;
+
+    /// <summary>Nothing has been selected, translated or opened on this monitor.</summary>
+    internal bool Untouched => _mode == Mode.Pointing && !_acted && _layers.Count == 0 && _card == null;
     private IntPtr _previousForeground;
     private DateTime _openedAt = DateTime.UtcNow;
     private bool _hintFollows = true;
@@ -118,7 +121,13 @@ internal sealed class OverlayWindow : Window
 
         _idle = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
         // Only an untouched pointer goes away by itself; never one with a selection or translations on it.
-        _idle.Tick += (_, _) => { if (_mode == Mode.Pointing && !_acted && _layers.Count == 0) CloseOverlay(); };
+        // An untouched pointer goes away by itself, but only if no monitor has anything going on:
+        // a quiet monitor must never close a translation or card on another one.
+        _idle.Tick += (_, _) =>
+        {
+            _idle.Stop();
+            if (Untouched && _app.AllOverlaysUntouched) CloseOverlay();
+        };
 
         SourceInitialized += (_, _) => PlaceOnMonitor();
         Loaded += (_, _) => OnLoaded();
@@ -394,6 +403,12 @@ internal sealed class OverlayWindow : Window
 
     private void UpdateHover(Point point)
     {
+        // With translations on screen, nothing is outlined until you drag a new selection.
+        if (_layers.Count > 0)
+        {
+            if (!_dragging) _frame.Visibility = Visibility.Collapsed;
+            return;
+        }
         // Keep the element outline while the pointer stays on it.
         if (!_hover.IsEmpty && _hover.Contains(point) && _hoverIsElement) return;
         var px = new Point(point.X * _scale, point.Y * _scale);
@@ -417,7 +432,7 @@ internal sealed class OverlayWindow : Window
 
     private void OnProbed(Win32.POINT point, Int32Rect? rect)
     {
-        if (_mode is not (Mode.Pointing or Mode.Adding) || _dragging || rect == null) return;
+        if (_mode is not (Mode.Pointing or Mode.Adding) || _dragging || rect == null || _layers.Count > 0) return;
         var r = rect.Value;
         var local = new Int32Rect(r.X - Shot.Bounds.X, r.Y - Shot.Bounds.Y, r.Width, r.Height);
         var dip = ToDip(local);
@@ -599,6 +614,7 @@ internal sealed class OverlayWindow : Window
             var inline = new InlineTranslation(this, _settings, image, imageArea, _scale, blocks, area,
                 speak || _settings.SpeakOverlayTranslation);
             _layers.Add(inline);
+            inline.Removed += () => _layers.Remove(inline);
             _root.Children.Insert(_root.Children.IndexOf(_hint), inline);
             return;
         }
@@ -609,6 +625,7 @@ internal sealed class OverlayWindow : Window
     private void AddLayer(TranslationLayer layer)
     {
         _layers.Add(layer);
+        layer.Removed += () => _layers.Remove(layer);
         _root.Children.Insert(_root.Children.IndexOf(_hint), layer);
     }
 
@@ -1057,6 +1074,25 @@ internal sealed class OverlayWindow : Window
     }
 
     internal void SaveSettingsQuietly() => _app.SaveSettings();
+
+    /// <summary>Keeps the window under this area translated live, and puts the pointer away.</summary>
+    internal void StartLiveHere(Rect area)
+    {
+        var center = new Point((area.X + area.Width / 2) * _scale, (area.Y + area.Height / 2) * _scale);
+        IntPtr window = IntPtr.Zero;
+        for (int i = 0; i < Shot.Windows.Count && i < Shot.Handles.Count; i++)
+        {
+            var r = Shot.Windows[i];
+            if (center.X >= r.X && center.Y >= r.Y && center.X < r.X + r.Width && center.Y < r.Y + r.Height)
+            {
+                window = Shot.Handles[i];
+                break;
+            }
+        }
+        if (window == IntPtr.Zero) return;
+        CloseOverlay();
+        LiveTranslation.StartFor(_app, window);
+    }
 
     protected override void OnClosed(EventArgs e)
     {

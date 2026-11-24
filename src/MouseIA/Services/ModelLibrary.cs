@@ -26,7 +26,29 @@ internal static class ModelLibrary
         public string ModelPath => Path.Combine(Folder, Files[0].FileName);
         public string? MmprojPath => Files.Count > 1 ? Path.Combine(Folder, Files[1].FileName) : null;
         public bool IsDownloaded => Files.All(f => File.Exists(Path.Combine(Folder, f.FileName)));
+
+        /// <summary>The model's official page on Hugging Face, where the files come from.</summary>
+        public string Page => Files[0].Url[..Files[0].Url.IndexOf("/resolve/", StringComparison.Ordinal)];
+
+        public IReadOnlyList<string> Categories => CategoriesOf.TryGetValue(Id, out var c) ? c : Array.Empty<string>();
     }
+
+    /// <summary>Tabs: recommended, light PCs, mid-range PCs, very powerful PCs.</summary>
+    public static readonly string[] CategoryIds = { "recommended", "light", "medium", "strong" };
+
+    private static readonly Dictionary<string, string[]> CategoriesOf = new()
+    {
+        ["gemma4-e4b-litert"] = new[] { "recommended", "medium" },
+        ["qwen35-4b-gguf"] = new[] { "recommended", "medium" },
+        ["gemma4-e2b-litert"] = new[] { "recommended", "light" },
+        ["gemma4-e4b-gguf"] = new[] { "medium" },
+        ["gemma4-e2b-gguf"] = new[] { "light" },
+        ["qwen35-0.8b-gguf"] = new[] { "light" },
+        ["qwen35-2b-gguf"] = new[] { "light" },
+        ["gemma4-12b-gguf"] = new[] { "strong" },
+        ["qwen35-9b-gguf"] = new[] { "strong" },
+        ["gemma4-26b-gguf"] = new[] { "strong" },
+    };
 
     private const string Hf = "https://huggingface.co/";
 

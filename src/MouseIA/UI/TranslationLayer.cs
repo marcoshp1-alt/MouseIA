@@ -266,8 +266,12 @@ internal sealed class TranslationLayer : Grid
 
     private static string Shorten(string text) => text.Length > 160 ? text[..160] + "…" : text;
 
+    /// <summary>Raised when the user closes it.</summary>
+    public event Action? Removed;
+
     public void Remove()
     {
+        Removed?.Invoke();
         _cts.Cancel();
         _fit.Stop();
         Ui.Fade(this, 0, 140, () => (Parent as Panel)?.Children.Remove(this));

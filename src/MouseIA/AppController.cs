@@ -62,10 +62,12 @@ internal sealed class AppController : IDisposable
         _tray.Show();
         RegisterHotkey();
         ApplyShake();
-        StartupRegistration.Apply(Settings.StartWithWindows);
+        StartupRegistration.Apply(Settings.StartWithWindows, Settings.RunAsAdmin);
+        StartElevationWatch();
 
         StartUpdateChecks();
         StartNaturalVoices();
+        if (Settings.LiveTranslate) UI.LiveTranslation.StartFollowing(this);
 
         if (!Settings.FirstRunDone)
         {
@@ -239,6 +241,48 @@ internal sealed class AppController : IDisposable
         }
     }
 
+    private bool _elevationHinted;
+
+    /// <summary>
+    /// When an app opened as administrator is in front, Windows hides the mouse from MouseIA and the
+    /// shake can't work there. Say so once, with the fix.
+    /// </summary>
+    private void StartElevationWatch()
+    {
+        if (Elevation.IsSelfElevated) return;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        timer.Tick += (_, _) =>
+        {
+            if (_elevationHinted || Settings.RunAsAdmin || !Settings.Shake || _overlayOpen) return;
+            var foreground = Win32.GetForegroundWindow();
+            Win32.GetWindowThreadProcessId(foreground, out var pid);
+            if (pid == Win32.CurrentProcessId || !Elevation.IsWindowElevated(foreground)) return;
+            _elevationHinted = true;
+            timer.Stop();
+            _tray?.Notify("MouseIA", Loc.T("elevated_hint"));
+        };
+        timer.Start();
+    }
+
+    /// <summary>Restarts MouseIA as administrator right away (Windows asks first).</summary>
+    public bool RestartAsAdmin()
+    {
+        if (!Elevation.Relaunch("--after", Environment.ProcessId.ToString())) return false;
+        _application.Dispatcher.BeginInvoke(() => _application.Shutdown());
+        return true;
+    }
+
+    /// <summary>Turns the always-on live translation on or off (and saves it).</summary>
+    public void SetLiveTranslation(bool on)
+    {
+        var next = Settings.Clone();
+        next.LiveTranslate = on;
+        ApplySettings(next);
+        if (!on) UI.LiveTranslation.Stop();
+    }
+
+    public bool AllOverlaysUntouched => _overlays.All(o => o.Untouched);
+
     public void CloseAllOverlays()
     {
         foreach (var overlay in _overlays.ToList()) overlay.CloseSelf();
@@ -265,6 +309,8 @@ internal sealed class AppController : IDisposable
     private void StartNaturalVoices()
     {
         Services.SpeechService.UseNeuralVoices = Settings.NaturalVoices;
+        if (Settings.LiveTranslate && UI.LiveTranslation.Current is not { Following: true }) UI.LiveTranslation.StartFollowing(this);
+        else if (!Settings.LiveTranslate && UI.LiveTranslation.Current is { Following: true }) UI.LiveTranslation.Stop();
         if (!Settings.NaturalVoices || Services.NeuralVoices.Installed) return;
         var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
         timer.Tick += (_, _) =>
@@ -362,6 +408,10 @@ internal sealed class AppController : IDisposable
         var menu = new ContextMenu { Placement = PlacementMode.MousePoint };
         menu.Items.Add(MenuItem(Loc.Format("menu_open", Settings.Hotkey), () => ShowPointer()));
         menu.Items.Add(MenuItem(Loc.T("menu_settings"), () => OpenSettings()));
+        if (UI.LiveTranslation.Current != null)
+            menu.Items.Add(MenuItem(Loc.T("live_stop"), () => { if (Settings.LiveTranslate) SetLiveTranslation(false); else UI.LiveTranslation.Stop(); }));
+        else
+            menu.Items.Add(MenuItem(Loc.T("live_start"), () => SetLiveTranslation(true)));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem(Settings.Shake ? Loc.T("menu_shake_off") : Loc.T("menu_shake_on"), () =>
         {
@@ -414,7 +464,7 @@ internal sealed class AppController : IDisposable
         SaveSettings();
         if (hotkeyChanged || _hotkeyId == 0) RegisterHotkey();
         ApplyShake();
-        StartupRegistration.Apply(Settings.StartWithWindows);
+        StartupRegistration.Apply(Settings.StartWithWindows, Settings.RunAsAdmin);
         if (modelChanged) Services.LocalEngine.Stop(); // the next question starts the new model
         Services.SpeechService.UseNeuralVoices = Settings.NaturalVoices;
         if (languageChanged)
@@ -427,6 +477,7 @@ internal sealed class AppController : IDisposable
 
     public void Exit()
     {
+        UI.LiveTranslation.Stop();
         Services.LocalEngine.Stop();
         foreach (var overlay in _overlays.ToList()) overlay.Close();
         _settingsWindow?.Close();

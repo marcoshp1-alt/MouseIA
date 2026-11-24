@@ -290,6 +290,18 @@ internal static class Win32
 
     /// <summary>True when the foreground app covers its whole monitor (games, videos, presentations).</summary>
     [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
+
+    /// <summary>Keeps a window out of screenshots and screen captures (Windows 10 2004+).</summary>
+    public const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
+
+    public const long WS_EX_TRANSPARENT = 0x00000020, WS_EX_LAYERED = 0x00080000;
+    public const int GWLP_HWNDPARENT = -8;
+
+    [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
 
     /// <summary>Whether a key (virtual-key code) is held down right now.</summary>

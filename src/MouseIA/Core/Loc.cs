@@ -1,38 +1,68 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 namespace MouseIA;
 
-/// <summary>Interface text in Portuguese (Brazil) and English.</summary>
+/// <summary>
+/// Interface text. Portuguese (Brazil) and English live here; the other languages (the ten most
+/// spoken in the world) come from Lang/&lt;code&gt;.json, falling back to English for anything missing.
+/// </summary>
 public static class Loc
 {
-    private static bool _portuguese = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "pt";
+    /// <summary>The interface languages: code, native name.</summary>
+    public static readonly (string Code, string Name)[] Languages =
+    {
+        ("en", "English"), ("zh", "中文 (简体)"), ("hi", "हिन्दी"), ("es", "Español"), ("ar", "العربية"),
+        ("bn", "বাংলা"), ("fr", "Français"), ("pt", "Português (Brasil)"), ("ru", "Русский"), ("ur", "اردو"),
+    };
 
-    public static bool IsPortuguese => _portuguese;
+    private static string _language = Pick(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName);
+    private static Dictionary<string, string>? _extra;
+
+    public static bool IsPortuguese => _language == "pt";
+
+    /// <summary>The current interface language code.</summary>
+    public static string Language => _language;
+
+    /// <summary>Arabic and Urdu are written right to left.</summary>
+    public static bool IsRightToLeft => _language is "ar" or "ur";
 
     /// <summary>The culture answers are written in: the Windows language, or the chosen interface language.</summary>
     public static CultureInfo Culture { get; private set; } = CultureInfo.CurrentUICulture;
 
+    private static string Pick(string code) => Languages.Any(l => l.Code == code) ? code : "en";
+
     public static void Apply(string setting)
     {
         var windows = CultureInfo.CurrentUICulture;
-        _portuguese = setting switch
-        {
-            "pt" => true,
-            "en" => false,
-            _ => windows.TwoLetterISOLanguageName == "pt",
-        };
-        Culture = setting switch
-        {
-            "pt" => windows.TwoLetterISOLanguageName == "pt" ? windows : new CultureInfo("pt-BR"),
-            "en" => windows.TwoLetterISOLanguageName == "en" ? windows : new CultureInfo("en-US"),
-            _ => windows,
-        };
+        _language = setting == "auto" || string.IsNullOrEmpty(setting) ? Pick(windows.TwoLetterISOLanguageName) : Pick(setting);
+        _extra = _language is "pt" or "en" ? null : LoadExtra(_language);
+        Culture = setting == "auto" || windows.TwoLetterISOLanguageName == _language
+            ? windows
+            : new CultureInfo(_language switch { "pt" => "pt-BR", "en" => "en-US", "zh" => "zh-CN", "es" => "es-ES", "ar" => "ar-SA",
+                "hi" => "hi-IN", "bn" => "bn-BD", "fr" => "fr-FR", "ru" => "ru-RU", "ur" => "ur-PK", _ => "en-US" });
     }
 
-    public static string T(string key) =>
-        Strings.TryGetValue(key, out var pair) ? (_portuguese ? pair.Pt : pair.En) : key;
+    private static Dictionary<string, string>? LoadExtra(string code)
+    {
+        try
+        {
+            using var stream = typeof(Loc).Assembly.GetManifestResourceStream($"MouseIA.Lang.{code}.json");
+            if (stream == null) return null;
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(stream);
+        }
+        catch (Exception) { return null; }
+    }
+
+    public static string T(string key)
+    {
+        if (!Strings.TryGetValue(key, out var pair)) return key;
+        if (_language == "pt") return pair.Pt;
+        if (_extra != null && _extra.TryGetValue(key, out var text) && text.Length > 0) return text;
+        return pair.En;
+    }
 
     public static string Format(string key, params object[] args)
     {
@@ -315,6 +345,35 @@ public static class Loc
         ["openai_help"] = ("Da OpenAI. Cobrança pelo uso.", "By OpenAI. Billed by usage."),
         ["open_cache_folder"] = ("Abrir pasta de cache (Documentos\\MouseIA Cache)", "Open cache folder (Documents\\MouseIA Cache)"),
         ["drag_card"] = ("Arraste para mover", "Drag to move"),
+        ["run_as_admin"] = ("Funcionar também em apps de administrador", "Also work over administrator apps"),
+        ["run_as_admin_help"] = ("Alguns programas (CrystalDiskInfo, HWMonitor, instaladores…) rodam como administrador, e o Windows não deixa o MouseIA perceber o mouse balançando em cima deles. Ligado, o MouseIA também abre como administrador (o Windows pede permissão uma vez). Obs.: arrastar arquivos do Explorer para o cartão deixa de funcionar nesse modo.", "Some programs (CrystalDiskInfo, HWMonitor, installers…) run as administrator, and Windows won't let MouseIA notice the mouse shaking over them. When on, MouseIA opens as administrator too (Windows asks once). Note: dragging files from Explorer into the card stops working in this mode."),
+        ["run_as_admin_on"] = ("Ativo: o MouseIA está rodando como administrador e funciona sobre qualquer app.", "On: MouseIA is running as administrator and works over any app."),
+        ["run_as_admin_restart"] = ("Para valer, o MouseIA precisa reiniciar como administrador. O Windows vai pedir permissão. Reiniciar agora?", "MouseIA has to restart as administrator for this. Windows will ask for permission. Restart now?"),
+        ["restart_now"] = ("Reiniciar agora", "Restart now"),
+        ["elevated_hint"] = ("Esse app está aberto como administrador, e o Windows não deixa o MouseIA perceber o mouse balançando nele. Use Alt+Shift+M ou ative \"Funcionar também em apps de administrador\" em Configurações > Ativação.", "This app runs as administrator, and Windows won't let MouseIA notice the mouse shaking over it. Use Alt+Shift+M or turn on \"Also work over administrator apps\" in Settings > Activation."),
+        ["engine_step"] = ("1º passo: instalar o motor de IA", "Step 1: install the AI engine"),
+        ["engine_step_help"] = ("O motor é o programa que roda as IAs no seu computador (llama.cpp e LiteRT-LM). Ele é instalado uma vez só, numa pasta do MouseIA, e não mexe no resto do Windows. Depois disso você escolhe ou baixa a IA.", "The engine is what runs AIs on your computer (llama.cpp and LiteRT-LM). It's installed once, in MouseIA's own folder, without touching the rest of Windows. Then you choose or download the AI."),
+        ["engine_install"] = ("Instalar o motor", "Install the engine"),
+        ["engine_install_failed"] = ("Não deu para instalar: {0}. Confira a internet e tente de novo.", "Couldn't install: {0}. Check your connection and try again."),
+        ["cat_recommended"] = ("Recomendado", "Recommended"),
+        ["cat_light"] = ("Para PC fraco", "For weak PCs"),
+        ["cat_medium"] = ("Para PC médio", "For mid-range PCs"),
+        ["cat_strong"] = ("Para PC super forte", "For very powerful PCs"),
+        ["req_recommended"] = ("Funcionam bem na maioria dos computadores.\n\nPC: 8 a 16 GB de RAM; qualquer placa de vídeo dos últimos anos ajuda muito.\nNotebook: 8 a 16 GB de RAM; Intel Core i5 / Ryzen 5 de 2019 em diante (vídeo integrado já serve).", "Run well on most computers.\n\nPC: 8 to 16 GB RAM; any graphics card from the last few years helps a lot.\nLaptop: 8 to 16 GB RAM; Intel Core i5 / Ryzen 5 from 2019 on (integrated graphics is fine)."),
+        ["req_light"] = ("Para computadores simples ou antigos.\n\nPC: 4 a 8 GB de RAM, processador de 4 núcleos; não precisa de placa de vídeo.\nNotebook: 8 GB de RAM; Intel Core i3 / Ryzen 3 ou melhor.", "For simple or older computers.\n\nPC: 4 to 8 GB RAM, a 4-core processor; no graphics card needed.\nLaptop: 8 GB RAM; Intel Core i3 / Ryzen 3 or better."),
+        ["req_medium"] = ("Para computadores bons do dia a dia.\n\nPC: 16 GB de RAM e placa de vídeo com 6 GB ou mais (ex.: GTX 1660, RTX 3050, RX 6600).\nNotebook: 16 GB de RAM; Core i5 / Ryzen 5 recente, de preferência com placa de vídeo dedicada.", "For good everyday computers.\n\nPC: 16 GB RAM and a graphics card with 6 GB or more (e.g. GTX 1660, RTX 3050, RX 6600).\nLaptop: 16 GB RAM; recent Core i5 / Ryzen 5, ideally with a dedicated graphics card."),
+        ["req_strong"] = ("Para máquinas potentes, de jogos ou trabalho pesado.\n\nPC: 32 GB de RAM e placa de vídeo com 12 GB ou mais (ex.: RTX 3060 12 GB, RTX 4070, RX 7800 XT). O 26B pede 16 GB de vídeo (ou 32 GB de RAM, mais lento).\nNotebook: gamer com RTX 4070 / 5070 ou melhor (8 GB+) e 32 GB de RAM.", "For powerful gaming or workstation machines.\n\nPC: 32 GB RAM and a graphics card with 12 GB or more (e.g. RTX 3060 12 GB, RTX 4070, RX 7800 XT). The 26B wants 16 GB VRAM (or 32 GB RAM, slower).\nLaptop: gaming laptop with RTX 4070 / 5070 or better (8 GB+) and 32 GB RAM."),
+        ["official_page"] = ("Ver a página oficial: {0}", "Open the official page: {0}"),
+        ["live_label"] = ("Ao vivo → {0}", "Live → {0}"),
+        ["live_translating"] = ("traduzindo…", "translating…"),
+        ["live_pause"] = ("Pausar", "Pause"),
+        ["live_resume"] = ("Continuar", "Resume"),
+        ["live_paused"] = ("Pausado", "Paused"),
+        ["live_stop"] = ("Parar a tradução ao vivo", "Stop live translation"),
+        ["live_start"] = ("Ligar a tradução automática ao vivo", "Turn on live translation"),
+        ["live_here"] = ("Tradução ao vivo desta janela (traduz tudo enquanto você usa)", "Live translation of this window (translates everything as you use it)"),
+        ["live_mode"] = ("Tradução automática ao vivo", "Live automatic translation"),
+        ["live_mode_help"] = ("Traduz em tempo real a janela que estiver na frente (programa, navegador ou o próprio Windows), por cima do texto original, enquanto você usa. Os cliques passam direto. Cada texto novo vai para a IA uma vez só; o resto vem da memória. Também dá para ligar só para uma janela pelo botão ▶ depois de traduzir uma seleção.", "Translates the window in front (app, browser or Windows itself) in real time, over the original text, while you use it. Clicks go straight through. Each new text goes to the AI once; the rest comes from memory. You can also turn it on for a single window with the ▶ button after translating a selection."),
         ["cancel"] = ("Cancelar", "Cancel"),
         ["open_folder"] = ("Abrir pasta", "Open folder"),
         ["local_mode_download"] = ("Baixar IAs", "Download AIs"),
