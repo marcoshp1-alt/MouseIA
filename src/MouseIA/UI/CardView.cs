@@ -1318,21 +1318,84 @@ internal sealed class AnswerView : StackPanel
 }
 
 /// <summary>Clipboard access that survives another app holding the clipboard for a moment.</summary>
+/// <summary>
+/// Copies text with the plain Windows clipboard (the text itself, not a promise to provide it later),
+/// so it pastes anywhere: WhatsApp, browsers, apps running at another permission level, even after MouseIA closes.
+/// </summary>
 internal static class Clipboard2
 {
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool OpenClipboard(IntPtr owner);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool CloseClipboard();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool EmptyClipboard();
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetClipboardData(uint format, IntPtr data);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GlobalLock(IntPtr memory);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool GlobalUnlock(IntPtr memory);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GlobalFree(IntPtr memory);
+
+    private const uint CF_UNICODETEXT = 13, GMEM_MOVEABLE = 0x0002;
+    private static System.Windows.Interop.HwndSource? _owner;
+
+    /// <summary>A hidden window that owns what we copy (Windows needs one).</summary>
+    private static IntPtr Owner()
+    {
+        _owner ??= new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("MouseIA.Clipboard")
+        {
+            ParentWindow = new IntPtr(-3), // message-only
+            Width = 0,
+            Height = 0,
+            WindowStyle = 0,
+        });
+        return _owner.Handle;
+    }
+
     public static void SetText(string text)
     {
-        for (int attempt = 0; attempt < 5; attempt++)
+        text ??= "";
+        for (int attempt = 0; attempt < 10; attempt++)
         {
+            if (TrySet(text)) return;
+            Thread.Sleep(50); // another program has the clipboard open for a moment
+        }
+        // Last resort: WPF's own way.
+        try { Clipboard.SetDataObject(text, true); }
+        catch (Exception ex) { Native.Log.Write("Clipboard: " + ex.Message); }
+    }
+
+    private static bool TrySet(string text)
+    {
+        if (!OpenClipboard(Owner())) return false;
+        IntPtr memory = IntPtr.Zero;
+        try
+        {
+            EmptyClipboard();
+            int bytes = (text.Length + 1) * 2;
+            memory = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+            if (memory == IntPtr.Zero) return false;
+            var target = GlobalLock(memory);
+            if (target == IntPtr.Zero) return false;
             try
             {
-                Clipboard.SetText(text);
-                return;
+                System.Runtime.InteropServices.Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
+                System.Runtime.InteropServices.Marshal.WriteInt16(target, text.Length * 2, 0);
             }
-            catch (System.Runtime.InteropServices.COMException)
-            {
-                Thread.Sleep(60);
-            }
+            finally { GlobalUnlock(memory); }
+            if (SetClipboardData(CF_UNICODETEXT, memory) == IntPtr.Zero) return false;
+            memory = IntPtr.Zero; // Windows owns it now
+            return true;
+        }
+        finally
+        {
+            if (memory != IntPtr.Zero) GlobalFree(memory);
+            CloseClipboard();
         }
     }
 }

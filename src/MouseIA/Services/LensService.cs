@@ -21,7 +21,7 @@ public static class LensService
     {
         var fitted = ImageUtil.Fit(ImageUtil.Flatten(image), 1000);
         // If the browser blocks the automatic upload, the picture is ready to paste.
-        try { Clipboard.SetImage(fitted); } catch (Exception) { }
+        try { Clipboard.SetDataObject(new DataObject(DataFormats.Bitmap, fitted), true); } catch (Exception) { }
 
         Directory.CreateDirectory(Folder);
         CleanOld();
