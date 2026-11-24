@@ -154,16 +154,30 @@ internal static class LocalEngine
         foreach (var variant in variants)
         {
             var exe = InstalledLlamaServer(variant) ?? await DownloadLlamaAsync(variant, progress, ct).ConfigureAwait(false);
-            int port = FreePort();
-            var args = new StringBuilder();
-            args.Append($"-m \"{model}\" --host 127.0.0.1 --port {port} -c 8192");
-            if (!string.IsNullOrEmpty(mmproj)) args.Append($" --mmproj \"{mmproj}\"");
-            args.Append(variant == "cpu" ? " -ngl 0" : " -ngl 999");
-            progress?.Report(Loc.T("engine_loading"));
-            if (await LaunchAndWaitAsync(exe, args.ToString(), port, "/health", ct).ConfigureAwait(false))
+            // First with the speed-ups; if this llama.cpp build doesn't know one of them, plainly.
+            foreach (bool tuned in new[] { true, false })
             {
-                _modelId = Path.GetFileNameWithoutExtension(model);
-                return;
+                int port = FreePort();
+                var args = new StringBuilder();
+                args.Append($"-m \"{model}\" --host 127.0.0.1 --port {port} -c 8192");
+                if (!string.IsNullOrEmpty(mmproj)) args.Append($" --mmproj \"{mmproj}\"");
+                args.Append(variant == "cpu" ? " -ngl 0" : " -ngl 999");
+                if (tuned)
+                {
+                    // One conversation at a time (less memory), reuse the shared start of prompts,
+                    // leave a core free so the computer doesn't stutter, and answer directly
+                    // (models that "think" first, like Qwen, are much slower for translations).
+                    int threads = Math.Max(1, Environment.ProcessorCount / 2 - 1);
+                    args.Append($" -np 1 --cache-reuse 256 -t {threads} --reasoning-budget 0");
+                }
+                progress?.Report(Loc.T("engine_loading"));
+                if (await LaunchAndWaitAsync(exe, args.ToString(), port, "/health", ct).ConfigureAwait(false))
+                {
+                    _modelId = Path.GetFileNameWithoutExtension(model);
+                    return;
+                }
+                Log.Write($"llama-server ({variant}, tuned={tuned}) failed: {Tail()}");
+                Stop();
             }
             lastError = Tail();
             Log.Write($"llama-server ({variant}) failed: {lastError}");
@@ -516,7 +530,11 @@ internal static class JobObject
             {
                 _job = CreateJobObject(IntPtr.Zero, null);
                 var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                // The AI engines run just below normal priority: the computer stays smooth while they work
+                // (the graphics card's speed isn't affected; on the processor, the app you're using comes first).
+                const uint JOB_OBJECT_LIMIT_PRIORITY_CLASS = 0x20, BELOW_NORMAL_PRIORITY_CLASS = 0x4000;
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+                info.BasicLimitInformation.PriorityClass = BELOW_NORMAL_PRIORITY_CLASS;
                 SetInformationJobObject(_job, JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>());
             }
             AssignProcessToJobObject(_job, process.Handle);

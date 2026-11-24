@@ -184,6 +184,7 @@ internal sealed class CardView : Grid
             if (!dragging) return;
             dragging = false;
             header.ReleaseMouseCapture();
+            if (UserMoved) _host.RememberCardPosition(_left, _top);
         }
         header.MouseLeftButtonUp += (_, _) => EndDrag();
         header.LostMouseCapture += (_, _) => dragging = false;
@@ -365,6 +366,13 @@ internal sealed class CardView : Grid
     public bool UserMoved { get; private set; }
 
     public double Left => _left;
+
+    /// <summary>Puts the card where the user left it last time.</summary>
+    public void PlaceRemembered(double left, double top)
+    {
+        UserMoved = true;
+        MoveTo(left, top);
+    }
     public double Top => _top;
 
     public void MoveTo(double left, double top)

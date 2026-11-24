@@ -148,6 +148,7 @@ internal static class Theme
         public const string Pc = "";
         public const string Warning = "";
         public const string Play = "";
+        public const string Delete = "\uE74D";
         public const string Clear = "";
     }
 

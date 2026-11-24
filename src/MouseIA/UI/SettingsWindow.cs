@@ -655,21 +655,32 @@ internal sealed class SettingsWindow : Window
     {
         var holder = new StackPanel();
         var content = new ContentControl();
+        // "Download" is just a place to get models; the saved mode stays file or server.
         var mode = new Segmented(new[]
         {
             ("file", Loc.T("local_mode_file")),
+            ("download", Loc.T("local_mode_download")),
             ("server", Loc.T("local_mode_server")),
         }, _draft.LocalMode);
         mode.Margin = new Thickness(0, 0, 0, 14);
+        FrameworkElement Show(string m) => m switch
+        {
+            "server" => ServerDetails(),
+            "download" => DownloadDetails(() => mode.Selected = "file"),
+            _ => FileDetails(),
+        };
         mode.Changed += m =>
         {
-            _draft.LocalMode = m;
-            Changed();
-            content.Content = m == "file" ? FileDetails() : ServerDetails();
+            if (m != "download")
+            {
+                _draft.LocalMode = m;
+                Changed();
+            }
+            content.Content = Show(m);
         };
         holder.Children.Add(mode);
         holder.Children.Add(content);
-        content.Content = _draft.LocalMode == "file" ? FileDetails() : ServerDetails();
+        content.Content = Show(_draft.LocalMode);
         return holder;
     }
 
@@ -845,6 +856,7 @@ internal sealed class SettingsWindow : Window
         {
             Children =
             {
+                Section(Field(Loc.T("your_models"), Loc.T("your_models_help"), YourModels(Refresh))),
                 Section(
                     Field(Loc.T("model_file"), Loc.T("model_file_help"), fileBlock),
                     Field(Loc.T("vision"), null, visionBlock),
@@ -854,6 +866,244 @@ internal sealed class SettingsWindow : Window
                 Section(help),
             },
         };
+    }
+
+    // ---- local models: download, choose, delete, cache ----
+
+    private void UseModel(string model, string? mmproj)
+    {
+        _draft.LocalModelFile = model;
+        _draft.LocalMmproj = mmproj ?? "";
+        _draft.LocalMode = "file";
+        _draft.Provider = ProviderIds.Local;
+        Changed();
+    }
+
+    /// <summary>The ready-to-download list: the best local models, one click each.</summary>
+    private FrameworkElement DownloadDetails(Action showFiles)
+    {
+        var list = new StackPanel();
+        var rows = new List<(ModelLibrary.Entry Entry, StackPanel Actions, TextBlock Status)>();
+        foreach (var entry in ModelLibrary.Catalog)
+        {
+            var title = new StackPanel { Orientation = Orientation.Horizontal };
+            title.Children.Add(Ui.Label(entry.Name, 14, Theme.Text, FontWeights.SemiBold));
+            if (entry.Recommended)
+            {
+                var badge = new Border
+                {
+                    CornerRadius = new CornerRadius(8),
+                    Background = Theme.AccentSoft,
+                    Padding = new Thickness(8, 1, 8, 2),
+                    Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = Ui.Label(Loc.T("recommended"), 11, Theme.Text, FontWeights.SemiBold),
+                };
+                title.Children.Add(badge);
+            }
+            var detail = Ui.Label(entry.Detail, 12, Theme.Muted);
+            detail.TextWrapping = TextWrapping.Wrap;
+            var status = Ui.Label($"{ModelLibrary.FormatSize(entry.TotalSize)} · {entry.Engine}", 11.5, Theme.Faint);
+            var text = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+            text.Children.Add(title);
+            text.Children.Add(detail);
+            text.Children.Add(status);
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 14) };
+            DockPanel.SetDock(actions, Dock.Right);
+            row.Children.Add(actions);
+            row.Children.Add(text);
+            list.Children.Add(row);
+            rows.Add((entry, actions, status));
+        }
+
+        string Signature(ModelLibrary.Entry e) =>
+            ModelLibrary.IsDownloading(e.Id) ? "d" : e.IsDownloaded ? (SamePath(_draft.LocalModelFile, e.ModelPath) ? "u" : "r") : "n";
+        var shown = new Dictionary<string, string>();
+        void RefreshRows()
+        {
+            foreach (var (entry, actions, status) in rows)
+            {
+                var sig = Signature(entry);
+                if (sig == "d")
+                    status.Text = Loc.Format("model_downloading", (int)Math.Round(ModelLibrary.ProgressOf(entry.Id) * 100), ModelLibrary.FormatSize(entry.TotalSize));
+                else
+                    status.Text = $"{ModelLibrary.FormatSize(entry.TotalSize)} · {entry.Engine}";
+                if (shown.TryGetValue(entry.Id, out var before) && before == sig) continue;
+                shown[entry.Id] = sig;
+                actions.Children.Clear();
+                switch (sig)
+                {
+                    case "d":
+                        var cancel = new SecondaryButton(Loc.T("cancel"), Theme.Glyph.Close) { Height = 30 };
+                        cancel.Click += () => ModelLibrary.Cancel(entry.Id);
+                        actions.Children.Add(cancel);
+                        break;
+                    case "u":
+                        actions.Children.Add(Ui.Label("✓ " + Loc.T("model_in_use"), 12.5, Theme.Success, FontWeights.SemiBold));
+                        break;
+                    case "r":
+                        var use = new SecondaryButton(Loc.T("model_use"), Theme.Glyph.Check) { Height = 30 };
+                        use.Click += () => { UseModel(entry.ModelPath, entry.MmprojPath); RefreshRows(); };
+                        actions.Children.Add(use);
+                        break;
+                    default:
+                        var get = new PrimaryButton(Loc.T("model_download"), Theme.Glyph.Add) { Height = 32 };
+                        get.Click += async () =>
+                        {
+                            try
+                            {
+                                await ModelLibrary.DownloadAsync(entry);
+                                // Ready: it becomes the model in use.
+                                if (entry.IsDownloaded) UseModel(entry.ModelPath, entry.MmprojPath);
+                            }
+                            catch (OperationCanceledException) { }
+                            catch (Exception ex)
+                            {
+                                Native.Log.Write("Model download: " + ex.Message);
+                                status.Text = Loc.T("model_download_failed");
+                            }
+                            if (IsLoaded) RefreshRows();
+                        };
+                        actions.Children.Add(get);
+                        break;
+                }
+            }
+        }
+        RefreshRows();
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        timer.Tick += (_, _) => RefreshRows();
+        list.Loaded += (_, _) => timer.Start();
+        list.Unloaded += (_, _) => timer.Stop();
+
+        var where = Ui.Label(Loc.Format("models_saved_in", ModelLibrary.ModelsFolder), 12, Theme.Muted);
+        where.TextWrapping = TextWrapping.Wrap;
+        var openFolder = new SecondaryButton(Loc.T("open_folder"), Theme.Glyph.Folder) { Height = 30, Margin = new Thickness(0, 8, 8, 0) };
+        openFolder.Click += () => { try { System.IO.Directory.CreateDirectory(ModelLibrary.ModelsFolder); } catch (Exception) { } OpenUrl(ModelLibrary.ModelsFolder); };
+        var more = Link(Loc.T("more_models"), ModelLibrary.BrowseUrl);
+        more.Margin = new Thickness(0, 14, 0, 0);
+        var footer = new StackPanel();
+        footer.Children.Add(where);
+        footer.Children.Add(openFolder);
+        footer.Children.Add(more);
+
+        return new StackPanel
+        {
+            Children =
+            {
+                Section(Field(Loc.T("download_models"), Loc.T("download_models_help"), list)),
+                Section(footer),
+            },
+        };
+    }
+
+    private static bool SamePath(string? a, string? b)
+    {
+        try
+        {
+            return !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) &&
+                   string.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>The models on this computer: pick one, delete one (optionally with its cache), clean the cache.</summary>
+    private FrameworkElement YourModels(Action refreshFile)
+    {
+        var holder = new StackPanel();
+        void Build()
+        {
+            holder.Children.Clear();
+            var models = ModelLibrary.InstalledModels(_draft.LocalModelFile);
+            if (models.Count == 0)
+                holder.Children.Add(Ui.Label(Loc.T("no_models_yet"), 12.5, Theme.Faint));
+            foreach (var model in models)
+            {
+                bool inUse = SamePath(model.Path, _draft.LocalModelFile);
+                var name = Ui.Label(model.Name + (inUse ? "  ✓ " + Loc.T("model_in_use") : ""), 13.5, inUse ? Theme.Success : Theme.Text, FontWeights.SemiBold);
+                var info = Ui.Label($"{ModelLibrary.FormatSize(model.Size)} · {System.IO.Path.GetDirectoryName(model.Path)}", 11.5, Theme.Faint);
+                info.TextTrimming = TextTrimming.CharacterEllipsis;
+                var text = new StackPanel { Margin = new Thickness(0, 0, 10, 0) };
+                text.Children.Add(name);
+                text.Children.Add(info);
+                var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                if (!inUse)
+                {
+                    var use = new SecondaryButton(Loc.T("model_use"), Theme.Glyph.Check) { Height = 30 };
+                    use.Click += () =>
+                    {
+                        UseModel(model.Path, model.Entry?.MmprojPath);
+                        Build();
+                        refreshFile();
+                    };
+                    actions.Children.Add(use);
+                }
+                var delete = new IconButton(Theme.Glyph.Delete, Loc.T("model_delete"), 32, 11) { Margin = new Thickness(6, 0, 0, 0) };
+                delete.Click += () =>
+                {
+                    if (!ConfirmDelete(model)) return;
+                    if (inUse) { _draft.LocalModelFile = ""; _draft.LocalMmproj = ""; Changed(); }
+                    Build();
+                    refreshFile();
+                };
+                actions.Children.Add(delete);
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+                DockPanel.SetDock(actions, Dock.Right);
+                row.Children.Add(actions);
+                row.Children.Add(text);
+                holder.Children.Add(row);
+            }
+
+            var cacheFiles = ModelLibrary.AllCacheFiles();
+            var cacheSize = ModelLibrary.SizeOf(cacheFiles);
+            var clean = new SecondaryButton(Loc.Format("clean_cache", ModelLibrary.FormatSize(cacheSize)), Theme.Glyph.Delete)
+            {
+                Height = 30,
+                Margin = new Thickness(0, 6, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                IsEnabled = cacheFiles.Count > 0,
+            };
+            clean.Click += () =>
+            {
+                var (ok, _) = ConfirmDialog.Ask(this, Loc.T("clean_cache_title"),
+                    Loc.Format("clean_cache_message", cacheFiles.Count, ModelLibrary.FormatSize(cacheSize), Services.LocalEngine.CacheFolder),
+                    Loc.T("clean_cache_confirm"));
+                if (!ok) return;
+                Services.LocalEngine.Stop();
+                int failed = ModelLibrary.Delete(cacheFiles);
+                Build();
+                if (failed > 0) holder.Children.Add(Ui.Label(Loc.Format("delete_some_failed", failed), 12, Theme.Danger));
+            };
+            holder.Children.Add(clean);
+        }
+        Build();
+        return holder;
+    }
+
+    private bool ConfirmDelete(ModelLibrary.Installed model)
+    {
+        var files = ModelLibrary.FilesOfModel(model);
+        var cache = ModelLibrary.CacheFilesFor(model.Path);
+        // A hard link shares its data with the model: count the space once.
+        long modelSize = ModelLibrary.SizeOf(files.Where(f => !System.IO.Path.GetDirectoryName(f)!.Equals(Services.LocalEngine.CacheFolder, StringComparison.OrdinalIgnoreCase) || f.Equals(model.Path, StringComparison.OrdinalIgnoreCase)));
+        long cacheSize = ModelLibrary.SizeOf(cache);
+        string Summary(bool withCache) => Loc.Format("delete_total", ModelLibrary.FormatSize(modelSize + (withCache ? cacheSize : 0)),
+            System.IO.Path.GetDirectoryName(model.Path) ?? "");
+        var (ok, alsoCache) = ConfirmDialog.Ask(this, Loc.Format("delete_model_title", model.Name),
+            Loc.Format("delete_model_message", model.Name, ModelLibrary.FormatSize(modelSize)),
+            Loc.T("model_delete"),
+            cache.Count > 0 ? Loc.Format("delete_also_cache", ModelLibrary.FormatSize(cacheSize)) : null,
+            optionDefault: cache.Count > 0,
+            summary: Summary);
+        if (!ok) return false;
+        // The engine keeps the file open while it runs.
+        Services.LocalEngine.Stop();
+        var targets = new List<string>(files);
+        if (alsoCache) targets.AddRange(cache);
+        int failed = ModelLibrary.Delete(targets);
+        if (failed > 0)
+            ConfirmDialog.Ask(this, Loc.T("delete_failed_title"), Loc.Format("delete_some_failed", failed), "OK");
+        return true;
     }
 
     private static string LanguageName(string code)
@@ -926,14 +1176,25 @@ internal sealed class SettingsWindow : Window
     private FrameworkElement ActivationPage()
     {
         var page = Page(Loc.T("nav_activation"), Loc.T("activation_subtitle"));
+        // Each shortcut: change it your way, put the default back, or (the optional one) turn it off.
+        var mainKeys = new HotkeyBox(_draft.Hotkey, h => { _draft.Hotkey = h; Changed(); }, _app);
+        var mainRestore = new IconButton(Theme.Glyph.Refresh, Loc.Format("hotkey_restore", AppSettings.DefaultHotkey), 34, 11) { Margin = new Thickness(8, 0, 0, 0) };
+        mainRestore.Click += () => { _draft.Hotkey = AppSettings.DefaultHotkey; mainKeys.SetValue(_draft.Hotkey); Changed(); };
+        var mainRow = new StackPanel { Orientation = Orientation.Horizontal };
+        mainRow.Children.Add(mainKeys);
+        mainRow.Children.Add(mainRestore);
+
         var settingsKeys = new HotkeyBox(_draft.SettingsHotkey, h => { _draft.SettingsHotkey = h; Changed(); }, _app);
-        var clearKeys = new IconButton(Theme.Glyph.Close, Loc.T("hotkey_remove"), 34, 11) { Margin = new Thickness(8, 0, 0, 0) };
+        var settingsRestore = new IconButton(Theme.Glyph.Refresh, Loc.Format("hotkey_restore", AppSettings.DefaultSettingsHotkey), 34, 11) { Margin = new Thickness(8, 0, 0, 0) };
+        settingsRestore.Click += () => { _draft.SettingsHotkey = AppSettings.DefaultSettingsHotkey; settingsKeys.SetValue(_draft.SettingsHotkey); Changed(); };
+        var clearKeys = new IconButton(Theme.Glyph.Close, Loc.T("hotkey_remove"), 34, 11) { Margin = new Thickness(4, 0, 0, 0) };
         clearKeys.Click += () => { _draft.SettingsHotkey = ""; settingsKeys.SetValue(""); Changed(); };
         var settingsRow = new StackPanel { Orientation = Orientation.Horizontal };
         settingsRow.Children.Add(settingsKeys);
+        settingsRow.Children.Add(settingsRestore);
         settingsRow.Children.Add(clearKeys);
         page.Children.Add(Section(
-            Field(Loc.T("hotkey"), Loc.T("hotkey_help"), new HotkeyBox(_draft.Hotkey, h => { _draft.Hotkey = h; Changed(); }, _app)),
+            Field(Loc.T("hotkey"), Loc.T("hotkey_help"), mainRow),
             Field(Loc.T("settings_hotkey"), Loc.T("settings_hotkey_help"), settingsRow)));
 
         var sensitivity = DarkSlider(1, 10, _draft.ShakeSensitivity, 1);

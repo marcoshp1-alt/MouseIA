@@ -36,7 +36,7 @@ Mais coisas:
   O MouseIA baixa sozinho uma vez (cerca de 370 MB, qualidade máxima); nada para configurar.
 - Respostas com **Copiar**, **Ouvir** e **Tentar de novo**.
 - **Esc** ou **clique com o botão direito** fecha.
-- O cartão pode ser **arrastado** pelo topo para qualquer lugar da tela.
+- O cartão pode ser **arrastado** pelo topo para qualquer lugar da tela, e ele lembra a posição em cada monitor.
 
 ## Qual IA responde
 
@@ -52,6 +52,8 @@ Em **Configurações > Inteligência artificial**:
     **LiteRT-LM** (com Python próprio) para `.litertlm`. Usa a placa de vídeo ou o processador.
     Para perguntar sobre imagens, baixe também o arquivo **mmproj** do mesmo modelo na mesma pasta.
     O cache do LiteRT-LM fica em **Documentos\MouseIA Cache\<nome do PC>**, e não ao lado do modelo.
+  - **Baixar IAs**: uma lista com as 10 melhores IAs locais (Gemma 4 e Qwen3.5, de 0,5 a 15 GB), um clique baixa e já deixa em uso.
+    Em **Suas IAs** dá para trocar de modelo, apagar (com o cache junto, se quiser) e limpar o cache.
   - **Servidor**: Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan… O botão **Detectar** encontra e lista os modelos.
 
 As chaves ficam guardadas **criptografadas** (DPAPI) no seu usuário do Windows.
@@ -63,7 +65,7 @@ Baixe o `MouseIA-Setup.exe` na página de **Releases** e instale. Não precisa s
 Também há a versão **portátil** (`MouseIA-Portable.exe`), que roda sem instalar.
 
 **Atualizações automáticas:** o MouseIA confere o GitHub e se atualiza sozinho (Configurações > Atualizações).
-Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.3.2`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
+Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.3.3`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
 
 Requer Windows 10 (versão 2004) ou mais novo, 64 bits.
 

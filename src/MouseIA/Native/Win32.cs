@@ -289,6 +289,12 @@ internal static class Win32
     }
 
     /// <summary>True when the foreground app covers its whole monitor (games, videos, presentations).</summary>
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
+
+    /// <summary>Whether a key (virtual-key code) is held down right now.</summary>
+    public static bool IsKeyDown(int virtualKey) => (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+
     [DllImport("shell32.dll")]
     private static extern int SHQueryUserNotificationState(out int state);
 

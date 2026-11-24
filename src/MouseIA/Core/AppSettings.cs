@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Text.Json;
@@ -56,9 +57,15 @@ public sealed class AppSettings
     public string LocalKeyStored { get; set; } = "";
 
     // Activation
-    public string Hotkey { get; set; } = "Alt+Shift+M";
+    public string Hotkey { get; set; } = DefaultHotkey;
     /// <summary>Optional shortcut that opens the settings window ("" = none).</summary>
-    public string SettingsHotkey { get; set; } = "";
+    public string SettingsHotkey { get; set; } = DefaultSettingsHotkey;
+
+    public const string DefaultHotkey = "Alt+Shift+M";
+    public const string DefaultSettingsHotkey = "Ctrl+Alt+Space";
+
+    /// <summary>Where the user last dragged the card, per monitor ("x,y,w,h" of the monitor → "left,top").</summary>
+    public Dictionary<string, string> CardPositions { get; set; } = new();
     public bool Shake { get; set; } = true;
     public int ShakeSensitivity { get; set; } = 5; // 1..10
     public bool DisableInFullscreen { get; set; } = true;
@@ -201,8 +208,9 @@ public sealed class AppSettings
         VoiceRate = Math.Clamp(VoiceRate, 0.5, 2.0);
         LocalUrl = (LocalUrl ?? "").Trim();
         LocalModel = (LocalModel ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "Alt+Shift+M";
+        if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = DefaultHotkey;
         SettingsHotkey = (SettingsHotkey ?? "").Trim();
+        CardPositions ??= new();
         if (SettingsHotkey.Equals(Hotkey, StringComparison.OrdinalIgnoreCase)) SettingsHotkey = "";
     }
 

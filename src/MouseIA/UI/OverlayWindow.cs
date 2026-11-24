@@ -179,6 +179,16 @@ internal sealed class OverlayWindow : Window
         {
             if (t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion) _frosted ??= t.Result;
         });
+        if (_primary && _settings.Provider == ProviderIds.Local && _settings.UsesModelFile)
+        {
+            // Wake the local AI while you're still choosing what to select: the first answer comes sooner.
+            var settings = _settings;
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                try { await LocalEngine.EnsureRunningAsync(settings, null, System.Threading.CancellationToken.None); }
+                catch (Exception ex) { Log.Write("Engine warm-up: " + ex.Message); }
+            });
+        }
         if (_primary)
         {
             _previousForeground = Win32.GetForegroundWindow();
@@ -423,7 +433,7 @@ internal sealed class OverlayWindow : Window
 
     private void SetHover(Rect rect)
     {
-        if (rect == _hover) return;
+        if (rect == _hover && _frame.Visibility == Visibility.Visible) return;
         _hover = rect;
         ShowFrame(rect, animate: true);
     }
@@ -451,6 +461,8 @@ internal sealed class OverlayWindow : Window
 
     private void SetFrame(Rect rect)
     {
+        // Every new selection shows the frame again (it hides while a translation is drawn).
+        _frame.Visibility = Visibility.Visible;
         Canvas.SetLeft(_frame, rect.X);
         Canvas.SetTop(_frame, rect.Y);
         _frame.Width = Math.Max(0, rect.Width);
@@ -846,11 +858,31 @@ internal sealed class OverlayWindow : Window
         _card = new CardView(this, _settings);
         if (attachment != null) _card.AddAttachment(attachment);
         _root.Children.Add(_card);
+        if (TryRememberedPosition(out var savedLeft, out var savedTop)) _card.PlaceRemembered(savedLeft, savedTop);
         _card.Measure(new Size(CardView.CardWidth, double.PositiveInfinity));
         PositionCard(anchor);
         _card.SizeChanged += (_, _) => PositionCard(_selection.IsEmpty ? anchor : _selection);
         Ui.PopIn(_card);
         Dispatcher.BeginInvoke(DispatcherPriority.Input, () => _card?.FocusPrompt(typed));
+    }
+
+    private string MonitorKey => $"{Shot.Bounds.X},{Shot.Bounds.Y},{Shot.Bounds.Width},{Shot.Bounds.Height}";
+
+    /// <summary>Remembers where the card was dragged on this monitor, for next time.</summary>
+    internal void RememberCardPosition(double left, double top)
+    {
+        _settings.CardPositions[MonitorKey] = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{left:0},{top:0}");
+        _app.SaveSettings();
+    }
+
+    private bool TryRememberedPosition(out double left, out double top)
+    {
+        left = top = 0;
+        if (!_settings.CardPositions.TryGetValue(MonitorKey, out var value)) return false;
+        var parts = value.Split(',');
+        return parts.Length == 2 &&
+               double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out left) &&
+               double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out top);
     }
 
     private void PositionCard(Rect anchor)
@@ -958,6 +990,8 @@ internal sealed class OverlayWindow : Window
     private void OnDeactivated()
     {
         if (_modalOpen || _closing) return;
+        // Read the keys now: by the time we check, a quick Alt+Tab is already released.
+        bool userSwitch = Win32.IsKeyDown(0x12) || Win32.IsKeyDown(0x5B) || Win32.IsKeyDown(0x5C) || Win32.IsKeyDown(0x11);
         // Give system flyouts (voice typing, emoji panel) a moment; they don't count as leaving.
         var check = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         check.Tick += (_, _) =>
@@ -969,7 +1003,12 @@ internal sealed class OverlayWindow : Window
             if (pid == Win32.CurrentProcessId) return;
             // Right after opening, the app underneath sometimes takes the focus back by itself:
             // take it back instead of closing.
-            if (foreground == _previousForeground && (DateTime.UtcNow - _openedAt).TotalSeconds < 2.5)
+            // With a translation or the card on screen, only the user leaves (Alt+Tab, Win key, Esc, right-click):
+            // another program grabbing the focus (the local AI engine starting, a notification) doesn't close it.
+            userSwitch |= Win32.IsKeyDown(0x12) || Win32.IsKeyDown(0x5B) || Win32.IsKeyDown(0x5C);
+            bool holding = _layers.Count > 0 || _card != null || _acted;
+            if ((holding && !userSwitch) ||
+                (foreground == _previousForeground && (DateTime.UtcNow - _openedAt).TotalSeconds < 2.5))
             {
                 Win32.ForceForeground(Handle);
                 Activate();
