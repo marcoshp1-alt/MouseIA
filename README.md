@@ -1,6 +1,6 @@
 <p align="center"><img src="src/MouseIA/Assets/MouseIA-256.png" width="120" alt="MouseIA"></p>
 
-<h1 align="center">MouseIA</h1>
+<h1 align="center">MouseIA <sup>BETA</sup></h1>
 <p align="center"><b>Selecione qualquer coisa na tela e pergunte à IA.</b><br>
 Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e arquivos e leia QR Codes.</p>
 
@@ -35,6 +35,7 @@ Mais coisas:
 - **Apps de administrador:** o MouseIA abre como administrador por padrão (o Windows pede permissão uma vez), para o balanço funcionar sobre qualquer app. Se recusar, ele abre normal e dá para ligar depois em Ativação.
 - **Instalados:** mostra chaves de API, IAs locais, cache, motor e vozes naturais, com tamanho e pasta, e deixa remover cada um.
 - **Privacidade:** sem servidor próprio, sem conta e sem coleta de dados. Detalhes em Configurações > Sobre.
+- **Botão do meio:** clique com a rodinha (Scroll) em algo destacado, ou segure e arraste, para rodar a ação escolhida em Ativação > Ações do mouse.
 - **Atalho das configurações:** opcional, em Configurações > Ativação.
 - **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral). As animações rodam na taxa do seu monitor (120, 144, 240 Hz…).
 - **Vozes naturais do MouseIA:** voz feminina e masculina com som humano, offline (português, inglês, espanhol, francês, italiano e hindi).

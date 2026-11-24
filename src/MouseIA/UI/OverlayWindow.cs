@@ -498,7 +498,7 @@ internal sealed class OverlayWindow : Window
         {
             case Mode.Pointing:
             case Mode.Adding:
-                if ((_mouseDown || _rightDown) && !_dragging && (Math.Abs(point.X - _dragStart.X) > 5 || Math.Abs(point.Y - _dragStart.Y) > 5))
+                if ((_mouseDown || _rightDown || _middleDown) && !_dragging && (Math.Abs(point.X - _dragStart.X) > 5 || Math.Abs(point.Y - _dragStart.Y) > 5))
                 {
                     if (_mode == Mode.Pointing) _mode = Mode.Dragging;
                     _dragging = true;
@@ -829,31 +829,47 @@ internal sealed class OverlayWindow : Window
         CloseOverlay();
     }
 
-    private DateTime _lastWheel = DateTime.MinValue;
+    private bool _middleDown;
 
-    /// <summary>A wheel turn at a screen point (physical pixels). True when it was on this monitor.</summary>
-    internal bool WheelAt(int screenX, int screenY)
+    /// <summary>
+    /// Middle button (clicking the wheel): click on something highlighted, or hold and drag an area,
+    /// then the action chosen for it runs, just like the other buttons. Rolling the wheel does nothing.
+    /// </summary>
+    protected override void OnMouseDown(MouseButtonEventArgs e)
     {
-        var b = Shot.Bounds;
-        if (screenX < b.X || screenY < b.Y || screenX >= b.X + b.Width || screenY >= b.Y + b.Height) return false;
-        // One action per turn of the wheel, not one per notch.
-        if ((DateTime.UtcNow - _lastWheel).TotalMilliseconds < 700) return true;
-        if (_mode != Mode.Pointing || _settings.ScrollAction == "none") return true;
-        var point = new Point((screenX - b.X) / _scale, (screenY - b.Y) / _scale);
-        if (_hover.IsEmpty || !_hover.Contains(point)) UpdateHover(point);
-        if (_hover.IsEmpty) return true;
-        _lastWheel = DateTime.UtcNow;
-        RunAction(_settings.ScrollAction, _hover);
-        return true;
+        base.OnMouseDown(e);
+        if (e.ChangedButton != MouseButton.Middle || _mode != Mode.Pointing || _settings.ScrollAction == "none") return;
+        e.Handled = true;
+        _middleDown = true;
+        _dragging = false;
+        _dragStart = e.GetPosition(_root);
+        CaptureMouse();
+        _hintFollows = false;
+        Ui.Fade(_hint, 0, 120);
     }
 
-    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    protected override void OnMouseUp(MouseButtonEventArgs e)
     {
-        base.OnMouseWheel(e);
-        // Delivered by the mouse hook (WheelAt) when it's on; this is the fallback.
+        base.OnMouseUp(e);
+        if (e.ChangedButton != MouseButton.Middle || !_middleDown) return;
         e.Handled = true;
-        var screen = PointToScreen(e.GetPosition(this));
-        WheelAt((int)screen.X, (int)screen.Y);
+        _middleDown = false;
+        ReleaseMouseCapture();
+        var point = e.GetPosition(_root);
+        Rect chosen = _hover;
+        if (_dragging)
+        {
+            var dragged = Normalize(_dragStart, point);
+            if (dragged.Width >= 8 && dragged.Height >= 8) chosen = dragged;
+        }
+        _dragging = false;
+        if (_mode == Mode.Dragging) _mode = Mode.Pointing;
+        if (chosen.IsEmpty)
+        {
+            UpdateHover(point);
+            chosen = _hover;
+        }
+        if (!chosen.IsEmpty) RunAction(_settings.ScrollAction, chosen);
     }
 
     private void Select(Rect rectDip)

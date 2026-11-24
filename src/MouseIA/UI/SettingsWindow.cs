@@ -150,6 +150,27 @@ internal sealed class SettingsWindow : Window
         name.FontFamily = Theme.DisplayFont;
         name.Margin = new Thickness(10, 0, 0, 2);
         logo.Children.Add(name);
+        // This is a beta release: an orange BETA tag that gently pulses next to the name.
+        var beta = new Border
+        {
+            CornerRadius = new CornerRadius(7),
+            Background = Theme.B("#33FF8A1F"),
+            BorderBrush = Theme.B("#FF8A1F"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(6, 0, 6, 1),
+            Margin = new Thickness(8, 1, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = Ui.Label("BETA", 10.5, Theme.B("#FFA040"), FontWeights.Bold),
+            Effect = Theme.Glow(Color.FromRgb(0xFF, 0x8A, 0x1F), 12, 0.8),
+            ToolTip = Loc.T("beta_version_tip"),
+        };
+        beta.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, 0.35, TimeSpan.FromMilliseconds(900))
+        {
+            AutoReverse = true,
+            RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+            EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
+        });
+        logo.Children.Add(beta);
         logo.MouseLeftButtonDown += (_, e) => DragFromTitle(e);
 
         AddNav("ai", Theme.Glyph.Robot, Loc.T("nav_ai"));

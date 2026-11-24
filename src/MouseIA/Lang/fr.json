@@ -146,8 +146,8 @@
 "left_drag_help": "Par défaut : ouvrir la carte pour demander.",
 "right_drag": "Bouton droit (glisser)",
 "right_drag_help": "Par défaut : traduire directement à l’écran, sans carte. Un simple clic droit ferme.",
-"scroll_action": "Molette (Scroll) (sur un élément en surbrillance)",
-"scroll_action_help": "Par défaut : rien.",
+"scroll_action": "Bouton du milieu (clic sur la molette)",
+"scroll_action_help": "Cliquez avec la molette sur un élément en surbrillance, ou maintenez-la et faites glisser une zone. Tourner la molette ne fait rien. Par défaut : rien.",
 "speak_overlay": "Lire à voix haute les traductions à l’écran",
 "speak_overlay_help": "Lit chaque traduction faite avec le bouton droit.",
 "action_ask": "Demander (ouvrir la carte)",
@@ -417,5 +417,6 @@
 "server_address_hint": "Adresse du serveur (ou cliquez sur Détecter)",
 "beta_badge": "BÊTA",
 "live_mode_beta": "En test, pas encore disponible. Traduira en temps réel la fenêtre au premier plan, par-dessus le texte, pendant que vous l’utilisez.",
-"beta_tip": "Arrive dans une prochaine mise à jour"
+"beta_tip": "Arrive dans une prochaine mise à jour",
+"beta_version_tip": "Version bêta : encore en test. Un problème ? Signalez-le sur GitHub."
 }

@@ -171,15 +171,12 @@ internal sealed class AppController : IDisposable
         _shake.Scale = Math.Max(1.0, VisualScale());
         _shake.Reset();
         _shakeEnabled = Settings.Shake;
-        _wheelEnabled = Settings.ScrollAction != "none";
-        // The hook also delivers the mouse wheel to MouseIA reliably, whatever window has the focus.
-        if (Settings.Shake || _wheelEnabled)
+        if (Settings.Shake)
         {
             if (_hook == null)
             {
                 _hook = new MouseHook();
                 _hook.Moved += OnMouseMoved;
-                _hook.Wheel = OnMouseWheel;
             }
             if (!_hook.Install()) Log.Write("Mouse hook failed.");
         }
@@ -194,20 +191,6 @@ internal sealed class AppController : IDisposable
         Win32.GetCursorPos(out var point);
         Win32.MonitorAt(point, out var monitor);
         return Win32.MonitorScale(monitor);
-    }
-
-    private volatile bool _wheelEnabled;
-
-    // Runs on the hook thread: with MouseIA open, the wheel runs the chosen action on what's under the pointer.
-    private bool OnMouseWheel(int x, int y, int delta)
-    {
-        if (!_overlayOpen || !_wheelEnabled) return false;
-        _application.Dispatcher.BeginInvoke(DispatcherPriority.Send, () =>
-        {
-            foreach (var overlay in _overlays)
-                if (overlay.WheelAt(x, y)) break;
-        });
-        return true;
     }
 
     // Runs on the hook thread.

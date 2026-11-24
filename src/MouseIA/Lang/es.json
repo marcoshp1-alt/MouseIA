@@ -146,8 +146,8 @@
 "left_drag_help": "Predeterminado: abrir la tarjeta para preguntar.",
 "right_drag": "Botón derecho (arrastrar)",
 "right_drag_help": "Predeterminado: traducir en la propia pantalla, sin tarjeta. Un clic derecho simple cierra.",
-"scroll_action": "Rueda del ratón (Scroll) (sobre algo resaltado)",
-"scroll_action_help": "Predeterminado: nada.",
+"scroll_action": "Botón central (clic en la rueda)",
+"scroll_action_help": "Haz clic con la rueda en algo resaltado, o mantenla y arrastra un área. Girar la rueda no hace nada. Predeterminado: nada.",
 "speak_overlay": "Leer en voz alta las traducciones en pantalla",
 "speak_overlay_help": "Lee cada traducción hecha con el botón derecho.",
 "action_ask": "Preguntar (abrir la tarjeta)",
@@ -417,5 +417,6 @@
 "server_address_hint": "Dirección del servidor (o haz clic en Detectar)",
 "beta_badge": "BETA",
 "live_mode_beta": "En pruebas, aún no disponible. Traducirá en tiempo real la ventana que esté al frente, encima del texto, mientras la usas.",
-"beta_tip": "Llegará en una próxima actualización"
+"beta_tip": "Llegará en una próxima actualización",
+"beta_version_tip": "Versión beta: aún en pruebas. ¿Encontraste un problema? Cuéntalo en GitHub."
 }

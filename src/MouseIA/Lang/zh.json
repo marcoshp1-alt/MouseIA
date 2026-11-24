@@ -146,8 +146,8 @@
 "left_drag_help": "默认：打开卡片来提问。",
 "right_drag": "右键（拖动）",
 "right_drag_help": "默认：直接在屏幕上翻译，不打开卡片。单击右键则关闭。",
-"scroll_action": "鼠标滚轮（在高亮内容上） (Scroll)",
-"scroll_action_help": "默认：无操作。",
+"scroll_action": "中键（按下滚轮）",
+"scroll_action_help": "在高亮内容上按下滚轮，或按住滚轮拖出一个区域。滚动滚轮不会有任何操作。默认：无操作。",
 "speak_overlay": "朗读屏幕上的翻译",
 "speak_overlay_help": "朗读每次用右键完成的翻译。",
 "action_ask": "提问（打开卡片）",
@@ -417,5 +417,6 @@
 "server_address_hint": "服务器地址（或点击“检测”）",
 "beta_badge": "测试版",
 "live_mode_beta": "测试中，暂不可用。将在你使用时，把最前面的窗口实时翻译并覆盖在原文上。",
-"beta_tip": "将在后续更新中推出"
+"beta_tip": "将在后续更新中推出",
+"beta_version_tip": "测试版：仍在测试中。发现问题？请在 GitHub 上反馈。"
 }
