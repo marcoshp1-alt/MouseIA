@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using MouseIA.Core;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -37,8 +39,46 @@ internal static class OcrService
 
     public static async Task<string> RecognizeAsync(BitmapSource image)
     {
+        var (result, _, lang) = await RecognizeRawAsync(image);
+        if (result == null) return "";
+        var sb = new StringBuilder();
+        foreach (var line in result.Lines)
+        {
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(line.Text);
+        }
+        return Tidy(sb.ToString(), lang);
+    }
+
+    /// <summary>The text split into separate blocks with their places, in pixels of the given image.</summary>
+    public static async Task<List<OcrBox>> RecognizeBlocksAsync(BitmapSource image)
+    {
+        var (result, factor, lang) = await RecognizeRawAsync(image);
+        var pieces = new List<OcrBox>();
+        if (result == null) return pieces;
+        foreach (var line in result.Lines)
+        {
+            var words = line.Words.Select(w => new OcrBox(w.Text, w.BoundingRect.X / factor, w.BoundingRect.Y / factor,
+                w.BoundingRect.Width / factor, w.BoundingRect.Height / factor)).ToList();
+            pieces.AddRange(TextBlocks.SplitLine(words));
+        }
+        return TextBlocks.Group(pieces).Select(b => b with { Text = Tidy(b.Text, lang) }).Where(b => b.Text.Length > 0).ToList();
+    }
+
+    private static string Tidy(string text, string lang)
+    {
+        if (lang.StartsWith("zh", StringComparison.OrdinalIgnoreCase) || lang.StartsWith("ja", StringComparison.OrdinalIgnoreCase))
+        {
+            // The engine separates CJK characters with spaces.
+            text = Regex.Replace(text, @"(?<=[\u3000-\u9fff\uff00-\uffef]) (?=[\u3000-\u9fff\uff00-\uffef])", "");
+        }
+        return text.Trim();
+    }
+
+    private static async Task<(OcrResult? Result, double Factor, string Language)> RecognizeRawAsync(BitmapSource image)
+    {
         var engine = Engine;
-        if (engine == null) return "";
+        if (engine == null) return (null, 1, "");
 
         // Small text reads better enlarged; the engine has a size limit.
         double max = OcrEngine.MaxImageDimension;
@@ -58,21 +98,7 @@ internal static class OcrService
         using var bitmap = SoftwareBitmap.CreateCopyFromBuffer(buffer, BitmapPixelFormat.Bgra8, width, height,
             BitmapAlphaMode.Premultiplied);
         var result = await engine.RecognizeAsync(bitmap);
-
-        var sb = new StringBuilder();
-        foreach (var line in result.Lines)
-        {
-            if (sb.Length > 0) sb.Append('\n');
-            sb.Append(line.Text);
-        }
-        var text = sb.ToString();
-        var lang = engine.RecognizerLanguage.LanguageTag;
-        if (lang.StartsWith("zh", StringComparison.OrdinalIgnoreCase) || lang.StartsWith("ja", StringComparison.OrdinalIgnoreCase))
-        {
-            // The engine separates CJK characters with spaces.
-            text = Regex.Replace(text, @"(?<=[　-鿿＀-￯]) (?=[　-鿿＀-￯])", "");
-        }
-        return text.Trim();
+        return (result, factor, engine.RecognizerLanguage.LanguageTag);
     }
 
     public static string LanguagesSummary() =>

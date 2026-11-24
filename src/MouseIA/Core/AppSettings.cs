@@ -25,6 +25,7 @@ public static class ProviderIds
     public const string OpenAi = "openai";
     public const string Claude = "claude";
     public const string Local = "local";
+    public const string Grok = "grok";
 }
 
 public sealed class AppSettings
@@ -34,6 +35,7 @@ public sealed class AppSettings
     [JsonIgnore] public string GeminiKey { get; set; } = "";
     [JsonIgnore] public string OpenAiKey { get; set; } = "";
     [JsonIgnore] public string ClaudeKey { get; set; } = "";
+    [JsonIgnore] public string GrokKey { get; set; } = "";
     [JsonIgnore] public string LocalKey { get; set; } = "";
     public string Quality { get; set; } = "fast"; // fast | balanced | smart
     public string LocalUrl { get; set; } = "http://127.0.0.1:11434/v1";
@@ -50,6 +52,7 @@ public sealed class AppSettings
     public string GeminiKeyStored { get; set; } = "";
     public string OpenAiKeyStored { get; set; } = "";
     public string ClaudeKeyStored { get; set; } = "";
+    public string GrokKeyStored { get; set; } = "";
     public string LocalKeyStored { get; set; } = "";
 
     // Activation
@@ -78,6 +81,8 @@ public sealed class AppSettings
     public string TranslateTo { get; set; } = "auto"; // language code or "auto" (= interface language)
     public bool SpeakTranslation { get; set; } = false;
     public double VoiceRate { get; set; } = 1.0;
+    /// <summary>Use (and download once) MouseIA's own natural voices.</summary>
+    public bool NaturalVoices { get; set; } = true;
     /// <summary>"auto" picks the best voice for each language (natural/neural first), or a voice id.</summary>
     public string VoiceId { get; set; } = "auto";
     public string VoiceInputLanguage { get; set; } = "auto";
@@ -113,6 +118,7 @@ public sealed class AppSettings
         ProviderIds.Gemini => GeminiKey,
         ProviderIds.OpenAi => OpenAiKey,
         ProviderIds.Claude => ClaudeKey,
+        ProviderIds.Grok => GrokKey,
         ProviderIds.Local => LocalKey,
         _ => "",
     };
@@ -146,6 +152,7 @@ public sealed class AppSettings
                     settings.GeminiKey = SafeUnprotect(protector, settings.GeminiKeyStored);
                     settings.OpenAiKey = SafeUnprotect(protector, settings.OpenAiKeyStored);
                     settings.ClaudeKey = SafeUnprotect(protector, settings.ClaudeKeyStored);
+                    settings.GrokKey = SafeUnprotect(protector, settings.GrokKeyStored);
                     settings.LocalKey = SafeUnprotect(protector, settings.LocalKeyStored);
                     settings.Normalize();
                     return settings;
@@ -165,6 +172,7 @@ public sealed class AppSettings
         GeminiKeyStored = protector.Protect(GeminiKey.Trim());
         OpenAiKeyStored = protector.Protect(OpenAiKey.Trim());
         ClaudeKeyStored = protector.Protect(ClaudeKey.Trim());
+        GrokKeyStored = protector.Protect(GrokKey.Trim());
         LocalKeyStored = protector.Protect(LocalKey.Trim());
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
@@ -174,7 +182,7 @@ public sealed class AppSettings
 
     public void Normalize()
     {
-        if (Provider is not (ProviderIds.Gemini or ProviderIds.OpenAi or ProviderIds.Claude or ProviderIds.Local))
+        if (Provider is not (ProviderIds.Gemini or ProviderIds.OpenAi or ProviderIds.Claude or ProviderIds.Grok or ProviderIds.Local))
             Provider = ProviderIds.Gemini;
         if (Quality is not ("fast" or "balanced" or "smart")) Quality = "fast";
         ShakeSensitivity = Math.Clamp(ShakeSensitivity, 1, 10);
@@ -194,7 +202,7 @@ public sealed class AppSettings
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "Alt+Shift+M";
     }
 
-    public static readonly string[] Actions = { "ask", "translate", "translate_speak", "copy_text", "qr", "none" };
+    public static readonly string[] Actions = { "ask", "translate", "translate_speak", "copy_text", "qr", "lens", "none" };
 
     public static bool IsAction(string? value) => Array.IndexOf(Actions, value) >= 0;
 

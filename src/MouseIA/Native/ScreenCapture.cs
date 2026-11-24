@@ -16,6 +16,8 @@ internal sealed class ScreenShot
     public required double Scale { get; init; }
     /// <summary>Top-level windows, front to back, in pixels relative to the monitor.</summary>
     public required IReadOnlyList<Int32Rect> Windows { get; init; }
+    /// <summary>The window handle for each entry of Windows.</summary>
+    public IReadOnlyList<IntPtr> Handles { get; init; } = Array.Empty<IntPtr>();
     /// <summary>Cursor position in pixels relative to the monitor (may lie outside it).</summary>
     public required Point Cursor { get; init; }
 
@@ -72,7 +74,8 @@ internal static class ScreenCapture
             Image = Capture(bounds),
             Bounds = bounds,
             Scale = Win32.MonitorScale(monitor.Handle),
-            Windows = TopLevelWindows(bounds),
+            Windows = TopLevelWindows(bounds, out var handles),
+            Handles = handles,
             Cursor = new Point(cursor.X - bounds.X, cursor.Y - bounds.Y),
         };
     }
@@ -88,7 +91,8 @@ internal static class ScreenCapture
             Image = Capture(bounds),
             Bounds = bounds,
             Scale = Win32.MonitorScale(monitor),
-            Windows = TopLevelWindows(bounds),
+            Windows = TopLevelWindows(bounds, out var handles),
+            Handles = handles,
             Cursor = new Point(cursor.X - r.Left, cursor.Y - r.Top),
         };
     }
@@ -117,9 +121,11 @@ internal static class ScreenCapture
     }
 
     /// <summary>Visible app windows on the monitor, front to back, clipped and relative to it.</summary>
-    private static List<Int32Rect> TopLevelWindows(Int32Rect monitor)
+    private static List<Int32Rect> TopLevelWindows(Int32Rect monitor, out List<IntPtr> handles)
     {
         var list = new List<Int32Rect>();
+        var hwnds = new List<IntPtr>();
+        handles = hwnds;
         var ownPid = Win32.CurrentProcessId;
         Win32.EnumWindows((hwnd, _) =>
         {
@@ -135,6 +141,7 @@ internal static class ScreenCapture
             int right = Math.Min(rc.Right, monitor.X + monitor.Width), bottom = Math.Min(rc.Bottom, monitor.Y + monitor.Height);
             if (right - left < 40 || bottom - top < 40) return true;
             list.Add(new Int32Rect(left - monitor.X, top - monitor.Y, right - left, bottom - top));
+            hwnds.Add(hwnd);
             return list.Count < 64;
         }, IntPtr.Zero);
         return list;

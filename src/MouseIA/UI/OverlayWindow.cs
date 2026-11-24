@@ -42,6 +42,7 @@ internal sealed class OverlayWindow : Window
     private bool _rightDown;
     private bool _dragging;
     private readonly List<FrameworkElement> _layers = new();
+    private bool _acted;
     private bool _hintFollows = true;
     private Rect _hover = Rect.Empty;
     private Rect _selection = Rect.Empty;
@@ -51,6 +52,11 @@ internal sealed class OverlayWindow : Window
     private RectProxy? _frameProxy;
 
     public ScreenShot Shot { get; }
+
+    private BitmapSource? _frosted;
+
+    /// <summary>The screen, pre-blurred once, for glass surfaces.</summary>
+    public BitmapSource Frosted => _frosted ??= ImageUtil.Frosted(Shot.Image);
     public double ScreenWidthDip => Shot.Bounds.Width / _scale;
     public double ScreenHeightDip => Shot.Bounds.Height / _scale;
 
@@ -85,15 +91,16 @@ internal sealed class OverlayWindow : Window
         _screen.RenderTransform = _screenPulse;
         RenderOptions.SetBitmapScalingMode(_screen, BitmapScalingMode.HighQuality);
 
+        // The glow is drawn with soft outer rings rather than a blur effect, so it moves at full frame rate.
         _frame = new Border
         {
             BorderThickness = new Thickness(2),
             CornerRadius = new CornerRadius(12),
             BorderBrush = Theme.PointerStroke,
             Background = Theme.B("#0E9FD0FF"),
-            Effect = Theme.Glow(Theme.PointerGlow, 26, 0.95),
             IsHitTestVisible = false,
             Visibility = Visibility.Collapsed,
+            Child = GlowRings(),
         };
         _hint = BuildHint();
         _pointer = BuildPointer();
@@ -105,7 +112,8 @@ internal sealed class OverlayWindow : Window
         Content = _root;
 
         _idle = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
-        _idle.Tick += (_, _) => { if (_mode == Mode.Pointing) CloseOverlay(); };
+        // Only an untouched pointer goes away by itself; never one with a selection or translations on it.
+        _idle.Tick += (_, _) => { if (_mode == Mode.Pointing && !_acted && _layers.Count == 0) CloseOverlay(); };
 
         SourceInitialized += (_, _) => PlaceOnMonitor();
         Loaded += (_, _) => OnLoaded();
@@ -127,6 +135,22 @@ internal sealed class OverlayWindow : Window
 
     private IntPtr Handle => new WindowInteropHelper(this).Handle;
 
+    private static Grid GlowRings()
+    {
+        var grid = new Grid { IsHitTestVisible = false };
+        foreach (var (inset, thickness, color) in new[] { (-4.0, 3.0, "#665AA9FF"), (-9.0, 5.0, "#305AA9FF"), (-16.0, 7.0, "#145AA9FF") })
+        {
+            grid.Children.Add(new Border
+            {
+                Margin = new Thickness(inset),
+                BorderThickness = new Thickness(thickness),
+                CornerRadius = new CornerRadius(14 - inset),
+                BorderBrush = Theme.B(color),
+            });
+        }
+        return grid;
+    }
+
     private void PlaceOnMonitor()
     {
         var b = Shot.Bounds;
@@ -143,7 +167,13 @@ internal sealed class OverlayWindow : Window
     private void OnLoaded()
     {
         PlaceOnMonitor();
-        _probe = new ElementProbe(Handle, (point, rect) => Dispatcher.BeginInvoke(() => OnProbed(point, rect)));
+        _probe = new ElementProbe((point, rect) => Dispatcher.BeginInvoke(() => OnProbed(point, rect)));
+        // Prepare the frosted glass in the background.
+        var image = Shot.Image;
+        System.Threading.Tasks.Task.Run(() => ImageUtil.Frosted(image)).ContinueWith(t =>
+        {
+            if (t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion) _frosted ??= t.Result;
+        });
         if (_primary)
         {
             Win32.ForceForeground(Handle);
@@ -187,7 +217,7 @@ internal sealed class OverlayWindow : Window
 
     private Canvas BuildPointer()
     {
-        var canvas = new Canvas { IsHitTestVisible = false };
+        var canvas = new Canvas { IsHitTestVisible = false, CacheMode = new BitmapCache { RenderAtScale = 1.5 } };
         var halo = new Path
         {
             Data = Arrow,
@@ -206,12 +236,7 @@ internal sealed class OverlayWindow : Window
         };
         canvas.Children.Add(halo);
         canvas.Children.Add(arrow);
-        // The glow breathes gently.
-        halo.BeginAnimation(OpacityProperty, new DoubleAnimation(0.55, 1, TimeSpan.FromMilliseconds(900))
-        {
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever,
-        });
+        halo.Opacity = 0.85;
         return canvas;
     }
 
@@ -234,23 +259,40 @@ internal sealed class OverlayWindow : Window
     private void Ripple(Point center)
     {
         double reach = Math.Sqrt(ScreenWidthDip * ScreenWidthDip + ScreenHeightDip * ScreenHeightDip);
-        var rings = new[]
+        int insertAt = _root.Children.IndexOf(_frame);
+        // Rings are fixed-size ellipses filled with a ring-shaped gradient and scaled on the GPU.
+        foreach (var (delay, strength, width) in new[] { (0, 1.0, 0.035), (90, 0.55, 0.08) })
         {
-            new Ellipse
+            var ring = new Ellipse
             {
-                Stroke = Theme.PointerStroke,
-                StrokeThickness = 3,
-                Effect = Theme.Glow(Theme.PointerGlow, 30, 1),
+                Width = reach * 2,
+                Height = reach * 2,
                 IsHitTestVisible = false,
-            },
-            new Ellipse
+                Fill = RingBrush(strength, width),
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = new ScaleTransform(0.01, 0.01),
+                Opacity = 0,
+            };
+            Canvas.SetLeft(ring, center.X - reach);
+            Canvas.SetTop(ring, center.Y - reach);
+            _root.Children.Insert(insertAt, ring);
+            var begin = TimeSpan.FromMilliseconds(delay);
+            var grow = new DoubleAnimation(0.01, 1, TimeSpan.FromMilliseconds(1000))
             {
-                Stroke = Theme.B("#669FD0FF"),
-                StrokeThickness = 14,
-                Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 18 },
-                IsHitTestVisible = false,
-            },
-        };
+                BeginTime = begin,
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            };
+            var fade = new DoubleAnimationUsingKeyFrames { BeginTime = begin };
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(60))));
+            fade.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1000)),
+                new QuadraticEase { EasingMode = EasingMode.EaseIn }));
+            fade.Completed += (_, _) => _root.Children.Remove(ring);
+            var scale = (ScaleTransform)ring.RenderTransform;
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+            ring.BeginAnimation(OpacityProperty, fade);
+        }
+
         var flash = new Ellipse
         {
             Fill = new RadialGradientBrush(Theme.C("#88CFE6FF"), Theme.C("#00CFE6FF")),
@@ -260,9 +302,7 @@ internal sealed class OverlayWindow : Window
         };
         Canvas.SetLeft(flash, center.X - 130);
         Canvas.SetTop(flash, center.Y - 130);
-        int insertAt = _root.Children.IndexOf(_frame);
         _root.Children.Insert(insertAt, flash);
-        foreach (var ring in rings) _root.Children.Insert(insertAt, ring);
         Ui.Fade(flash, 0, 600, () => _root.Children.Remove(flash));
 
         _screenPulse.CenterX = center.X;
@@ -276,29 +316,25 @@ internal sealed class OverlayWindow : Window
             new SineEase { EasingMode = EasingMode.EaseInOut }));
         _screenPulse.BeginAnimation(ScaleTransform.ScaleXProperty, pulse);
         _screenPulse.BeginAnimation(ScaleTransform.ScaleYProperty, pulse);
+    }
 
-        var started = DateTime.UtcNow;
-        const double duration = 950;
-        EventHandler? frame = null;
-        frame = (_, _) =>
+    /// <summary>A soft bright band near the edge of a circle, fading in and out.</summary>
+    private static Brush RingBrush(double strength, double width)
+    {
+        byte a = (byte)(255 * strength);
+        var brush = new RadialGradientBrush
         {
-            double t = Math.Min(1, (DateTime.UtcNow - started).TotalMilliseconds / duration);
-            double eased = 1 - Math.Pow(1 - t, 3);
-            for (int i = 0; i < rings.Length; i++)
+            GradientStops =
             {
-                double radius = 10 + reach * eased * (i == 0 ? 1 : 0.92);
-                rings[i].Width = rings[i].Height = radius * 2;
-                Canvas.SetLeft(rings[i], center.X - radius);
-                Canvas.SetTop(rings[i], center.Y - radius);
-                rings[i].Opacity = (1 - t) * (i == 0 ? 0.95 : 0.6);
-            }
-            if (t >= 1)
-            {
-                CompositionTarget.Rendering -= frame;
-                foreach (var ring in rings) _root.Children.Remove(ring);
-            }
+                new GradientStop(Color.FromArgb(0, 0x9F, 0xD0, 0xFF), 0),
+                new GradientStop(Color.FromArgb(0, 0x9F, 0xD0, 0xFF), 1 - width * 2),
+                new GradientStop(Color.FromArgb((byte)(a * 0.55), 0x5A, 0xA9, 0xFF), 1 - width),
+                new GradientStop(Color.FromArgb(a, 0xF2, 0xF8, 0xFF), 1 - width * 0.35),
+                new GradientStop(Color.FromArgb(0, 0xF2, 0xF8, 0xFF), 1),
+            },
         };
-        CompositionTarget.Rendering += frame;
+        brush.Freeze();
+        return brush;
     }
 
     // ---- hint ----
@@ -322,6 +358,7 @@ internal sealed class OverlayWindow : Window
             Child = text,
             IsHitTestVisible = false,
             Effect = Theme.Glow(Theme.PointerGlow, 20, 0.7),
+            CacheMode = new BitmapCache(),
         };
     }
 
@@ -343,12 +380,20 @@ internal sealed class OverlayWindow : Window
         // Keep the element outline while the pointer stays on it.
         if (!_hover.IsEmpty && _hover.Contains(point) && _hoverIsElement) return;
         var px = new Point(point.X * _scale, point.Y * _scale);
-        var window = Shot.Windows.FirstOrDefault(r => px.X >= r.X && px.Y >= r.Y && px.X < r.X + r.Width && px.Y < r.Y + r.Height);
-        var rect = window.Width > 0 ? ToDip(window) : new Rect(0, 0, ScreenWidthDip, ScreenHeightDip);
+        int index = -1;
+        for (int i = 0; i < Shot.Windows.Count; i++)
+        {
+            var r = Shot.Windows[i];
+            if (px.X >= r.X && px.Y >= r.Y && px.X < r.X + r.Width && px.Y < r.Y + r.Height) { index = i; break; }
+        }
+        var rect = index >= 0 ? ToDip(Shot.Windows[index]) : new Rect(0, 0, ScreenWidthDip, ScreenHeightDip);
         _hoverIsElement = false;
         SetHover(rect);
-        var screen = new Win32.POINT { X = (int)px.X + Shot.Bounds.X, Y = (int)px.Y + Shot.Bounds.Y };
-        _probe?.Request(screen);
+        if (index >= 0 && index < Shot.Handles.Count)
+        {
+            var screen = new Win32.POINT { X = (int)px.X + Shot.Bounds.X, Y = (int)px.Y + Shot.Bounds.Y };
+            _probe?.Request(screen, Shot.Handles[index]);
+        }
     }
 
     private bool _hoverIsElement;
@@ -471,6 +516,8 @@ internal sealed class OverlayWindow : Window
     /// <summary>Does what the user set for a mouse gesture on an area of the screen.</summary>
     private void RunAction(string action, Rect area)
     {
+        _acted = true;
+        _idle.Stop();
         area.Intersect(new Rect(0, 0, ScreenWidthDip, ScreenHeightDip));
         if (area.IsEmpty || area.Width < 2 || area.Height < 2) return;
         switch (action)
@@ -488,6 +535,14 @@ internal sealed class OverlayWindow : Window
             case "qr":
                 _ = ShowCodesAsync(Crop(area), area, announceEmpty: true);
                 break;
+            case "lens":
+                try
+                {
+                    LensService.Search(Crop(area));
+                    Toast(area, Loc.T("lens_opened"));
+                }
+                catch (Exception ex) { Log.Write("Lens: " + ex.Message); }
+                break;
         }
     }
 
@@ -495,10 +550,59 @@ internal sealed class OverlayWindow : Window
         (int)Math.Round(areaDip.X * _scale), (int)Math.Round(areaDip.Y * _scale),
         (int)Math.Round(areaDip.Width * _scale), (int)Math.Round(areaDip.Height * _scale)));
 
-    private void TranslateHere(Rect area, bool speak)
+    private void TranslateHere(Rect area, bool speak) => _ = TranslateHereAsync(area, speak);
+
+    /// <summary>
+    /// Translates in place. When the area holds several separate pieces of text (a title, paragraphs,
+    /// buttons), each gets its own translation over it, so it reads like the original layout.
+    /// </summary>
+    private async System.Threading.Tasks.Task TranslateHereAsync(Rect area, bool speak)
     {
         _frame.Visibility = Visibility.Collapsed;
-        var layer = new TranslationLayer(this, _settings, Crop(area), area, speak);
+        var image = Crop(area);
+        List<OcrBox> blocks;
+        try { blocks = await System.Threading.Tasks.Task.Run(() => OcrService.RecognizeBlocksAsync(image)); }
+        catch (Exception) { blocks = new List<OcrBox>(); }
+
+        if (blocks.Count <= 1 || blocks.Count > 16)
+        {
+            AddLayer(new TranslationLayer(this, _settings, image, area, speak, null));
+            return;
+        }
+
+        var layers = new List<TranslationLayer>();
+        foreach (var block in blocks)
+        {
+            const double pad = 4;
+            var rect = new Rect(area.X + block.X / _scale - pad, area.Y + block.Y / _scale - pad,
+                block.Width / _scale + pad * 2, block.Height / _scale + pad * 2);
+            rect.Intersect(new Rect(0, 0, ScreenWidthDip, ScreenHeightDip));
+            if (rect.IsEmpty) continue;
+            var piece = ImageUtil.Crop(image, new Int32Rect(
+                (int)Math.Max(0, block.X), (int)Math.Max(0, block.Y),
+                (int)Math.Min(image.PixelWidth - Math.Max(0, block.X), Math.Max(1, block.Width)),
+                (int)Math.Min(image.PixelHeight - Math.Max(0, block.Y), Math.Max(1, block.Height))));
+            var layer = new TranslationLayer(this, _settings, piece, rect, speak: false, source: block.Text);
+            layers.Add(layer);
+            AddLayer(layer);
+        }
+        if (!speak) return;
+        // Read the blocks aloud one after another, top to bottom.
+        foreach (var layer in layers)
+        {
+            var text = await layer.Done;
+            if (text.Length == 0 || !layer.IsLoaded) continue;
+            try
+            {
+                var target = Languages.Resolve(_settings.TranslateTo, System.Globalization.CultureInfo.CurrentUICulture);
+                await SpeechService.SpeakToEndAsync(text, target.Code, _settings.VoiceRate, _settings.VoiceId);
+            }
+            catch (Exception ex) { Log.Write("Overlay speak: " + ex.Message); }
+        }
+    }
+
+    private void AddLayer(TranslationLayer layer)
+    {
         _layers.Add(layer);
         _root.Children.Insert(_root.Children.IndexOf(_hint), layer);
     }

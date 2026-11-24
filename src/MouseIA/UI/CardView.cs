@@ -16,6 +16,7 @@ using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MouseIA.Core;
+using MouseIA.Native;
 using MouseIA.Services;
 
 namespace MouseIA.UI;
@@ -52,6 +53,7 @@ internal sealed class CardView : Grid
     private readonly PillButton _copyText;
     private readonly PillButton _qr;
     private readonly PillButton _voice;
+    private readonly PillButton _lens;
     private readonly PillButton _file;
     private readonly Border _banner;
     private readonly StackPanel _messages;
@@ -79,22 +81,24 @@ internal sealed class CardView : Grid
             CornerRadius = new CornerRadius(24),
             Background = Theme.B("#01000000"),
             Effect = Theme.Shadow(),
+            CacheMode = new BitmapCache(),
         };
         var glow = new Border
         {
             CornerRadius = new CornerRadius(24),
             Background = Theme.B("#01000000"),
             Effect = Theme.Glow(Theme.PointerGlow, 46, 0.38),
+            CacheMode = new BitmapCache(),
         };
+        // Frosted glass: a pre-blurred copy of the screen, stretched (much lighter than a live blur).
         _backdrop = new Image
         {
-            Source = host.Shot.Image,
+            Source = host.Frosted,
             Stretch = Stretch.Fill,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Top,
-            Effect = new BlurEffect { Radius = 42, KernelType = KernelType.Gaussian, RenderingBias = RenderingBias.Performance },
         };
-        RenderOptions.SetBitmapScalingMode(_backdrop, BitmapScalingMode.LowQuality);
+        RenderOptions.SetBitmapScalingMode(_backdrop, BitmapScalingMode.HighQuality);
         // In a Canvas the full-screen backdrop doesn't take part in the card's size.
         var backdropHost = new Canvas { ClipToBounds = true };
         backdropHost.Children.Add(_backdrop);
@@ -171,6 +175,8 @@ internal sealed class CardView : Grid
         _qr.Click += () => _ = ReadCodesAsync(showEmpty: true);
         _voice = new PillButton(Theme.Glyph.Volume, Loc.T("listen_translation"), Loc.T("listen_translation_tip"));
         _voice.Click += () => _ = TranslateAsync(speak: true);
+        _lens = new PillButton(Theme.Glyph.Search, Loc.T("lens"), Loc.T("lens_tip"));
+        _lens.Click += SearchLens;
         _file = new PillButton(Theme.Glyph.Folder, Loc.T("open_file"), Loc.T("open_file_tip"));
         _file.Click += () => _ = OpenFilesAsync();
         _tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -180,7 +186,7 @@ internal sealed class CardView : Grid
             _tools.Children.Add(pill);
         }
         _tools.Children.Add(_language);
-        foreach (var pill in new FrameworkElement[] { _copyText, _qr, _voice, _file })
+        foreach (var pill in new FrameworkElement[] { _copyText, _qr, _lens, _voice, _file })
         {
             pill.Margin = new Thickness(0, 0, 6, 6);
             _tools.Children.Add(pill);
@@ -468,6 +474,26 @@ internal sealed class CardView : Grid
     }
 
     // ---- banner ----
+
+    private void SearchLens()
+    {
+        var image = _attachments.Select(a => a.Image).FirstOrDefault(i => i != null);
+        if (image == null)
+        {
+            ShowBanner(Theme.Glyph.Info, Loc.T("lens_no_image"));
+            return;
+        }
+        try
+        {
+            LensService.Search(image);
+            _host.CloseOverlay();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Lens: " + ex.Message);
+            ShowBanner(Theme.Glyph.Warning, Loc.T("lens_failed"));
+        }
+    }
 
     private void ShowBanner(string glyph, string text, params (string Label, Action Action)[] actions)
     {

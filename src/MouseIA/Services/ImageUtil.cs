@@ -98,6 +98,44 @@ internal static class ImageUtil
         return any ? FromBgra(pixels, w, h) : source;
     }
 
+    /// <summary>
+    /// A small, softly blurred copy of an image. Shown stretched to full size it looks like frosted glass,
+    /// at a fraction of the cost of a live blur effect.
+    /// </summary>
+    public static BitmapSource Frosted(BitmapSource source, int factor = 12, int passes = 3)
+    {
+        var small = Scale(source, 1.0 / factor);
+        var pixels = ToBgra(small, out int w, out int h);
+        var temp = new byte[pixels.Length];
+        for (int pass = 0; pass < passes; pass++)
+        {
+            BoxBlur(pixels, temp, w, h, horizontal: true);
+            BoxBlur(temp, pixels, w, h, horizontal: false);
+        }
+        return FromBgra(pixels, w, h);
+    }
+
+    private static void BoxBlur(byte[] src, byte[] dst, int w, int h, bool horizontal)
+    {
+        const int r = 2;
+        int outer = horizontal ? h : w, inner = horizontal ? w : h;
+        for (int o = 0; o < outer; o++)
+        {
+            for (int i = 0; i < inner; i++)
+            {
+                int b = 0, g = 0, rr = 0, a = 0, n = 0;
+                for (int k = -r; k <= r; k++)
+                {
+                    int j = Math.Clamp(i + k, 0, inner - 1);
+                    int idx = horizontal ? (o * w + j) * 4 : (j * w + o) * 4;
+                    b += src[idx]; g += src[idx + 1]; rr += src[idx + 2]; a += src[idx + 3]; n++;
+                }
+                int d = horizontal ? (o * w + i) * 4 : (i * w + o) * 4;
+                dst[d] = (byte)(b / n); dst[d + 1] = (byte)(g / n); dst[d + 2] = (byte)(rr / n); dst[d + 3] = (byte)(a / n);
+            }
+        }
+    }
+
     public static byte[] ToPng(BitmapSource source)
     {
         var encoder = new PngBitmapEncoder();

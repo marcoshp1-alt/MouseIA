@@ -20,7 +20,27 @@ internal static class SpeechService
 
     public static event Action? SpeakingEnded;
 
-    public static bool IsSpeaking { get; private set; }
+    private static bool _windowsSpeaking;
+
+    public static bool IsSpeaking
+    {
+        get => _windowsSpeaking || NeuralVoices.IsSpeaking;
+        private set => _windowsSpeaking = value;
+    }
+
+    static SpeechService()
+    {
+        // The neural voice finishes on a worker thread; listeners update the UI.
+        NeuralVoices.SpeakingEnded += () =>
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.CheckAccess()) SpeakingEnded?.Invoke();
+            else dispatcher.BeginInvoke(() => SpeakingEnded?.Invoke());
+        };
+    }
+
+    /// <summary>When false, "automatic" never picks MouseIA's own voices.</summary>
+    public static bool UseNeuralVoices { get; set; } = true;
 
     /// <summary>A voice from either of Windows' speech systems.</summary>
     public sealed record VoiceOption(string Id, string Name, string Language, bool Natural, bool Sapi)
@@ -40,6 +60,11 @@ internal static class SpeechService
     public static IReadOnlyList<VoiceOption> AllVoices()
     {
         var list = new List<VoiceOption>();
+        if (NeuralVoices.Installed)
+        {
+            list.Add(new VoiceOption(NeuralVoices.FemaleId, Loc.T("voice_neural_female"), "mul", true, false));
+            list.Add(new VoiceOption(NeuralVoices.MaleId, Loc.T("voice_neural_male"), "mul", true, false));
+        }
         try
         {
             foreach (var v in SpeechSynthesizer.AllVoices)
@@ -99,11 +124,14 @@ internal static class SpeechService
     public static VoiceOption? VoiceFor(string code, string preferredId = "auto")
     {
         var voices = AllVoices();
+        bool neural = NeuralVoices.Installed && NeuralVoices.Speaks(code);
         if (preferredId != "auto")
         {
             var chosen = voices.FirstOrDefault(v => v.Id == preferredId);
+            if (chosen != null && chosen.Language == "mul" && neural) return chosen;
             if (chosen != null && SameLanguage(chosen.Language, code)) return chosen;
         }
+        if (preferredId == "auto" && UseNeuralVoices && neural) return voices.First(v => v.Id == NeuralVoices.FemaleId);
         var prefix = code.Split('-')[0];
         var preferredRegion = prefix switch { "pt" => "pt-BR", "en" => "en-US", "es" => "es-MX", "zh" => "zh-CN", _ => code };
         return voices
@@ -118,9 +146,20 @@ internal static class SpeechService
     /// <summary>Speaks text; false when no voice is installed for the language.</summary>
     public static async Task<bool> SpeakAsync(string text, string languageCode, double rate, string voiceId = "auto")
     {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        // MouseIA's own voices download by themselves the first time they're useful.
+        if (voiceId == "auto" && UseNeuralVoices && !NeuralVoices.Installed && NeuralVoices.Speaks(languageCode))
+            _ = NeuralVoices.EnsureInstalledAsync();
         var voice = VoiceFor(languageCode, voiceId);
-        if (voice == null || string.IsNullOrWhiteSpace(text)) return false;
+        if (voice == null) return false;
         Stop();
+        if (voice.Language == "mul")
+        {
+            if (await NeuralVoices.SpeakAsync(text, languageCode, rate, voice.Id == NeuralVoices.MaleId)) return true;
+            // The engine couldn't speak: fall back to the best Windows voice.
+            voice = VoiceFor(languageCode, "windows");
+            if (voice == null) return false;
+        }
         if (voice.Sapi) return SpeakSapi(text, voice, rate);
 
         var info = SpeechSynthesizer.AllVoices.FirstOrDefault(v => "winrt:" + v.Id == voice.Id);
@@ -185,8 +224,16 @@ internal static class SpeechService
         SpeakingEnded?.Invoke();
     }
 
+    /// <summary>Speaks and waits until the voice has finished.</summary>
+    public static async Task SpeakToEndAsync(string text, string languageCode, double rate, string voiceId = "auto")
+    {
+        if (!await SpeakAsync(text, languageCode, rate, voiceId)) return;
+        while (IsSpeaking) await Task.Delay(120);
+    }
+
     public static void Stop()
     {
+        NeuralVoices.Stop();
         var player = _player;
         _player = null;
         if (player != null)

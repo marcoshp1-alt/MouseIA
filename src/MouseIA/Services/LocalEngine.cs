@@ -211,9 +211,42 @@ internal static class LocalEngine
 
     // ---- LiteRT-LM ----
 
+    /// <summary>Documents\MouseIA Cache\&lt;computer name&gt;: one folder per computer, safe with synced Documents.</summary>
+    public static string CacheFolder => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MouseIA Cache", Environment.MachineName);
+
+    /// <summary>
+    /// Puts a hard link to the model in the cache folder (no copy, no extra space) and returns its path.
+    /// If that isn't possible (another drive), the original path is used.
+    /// </summary>
+    private static string LinkIntoCache(string model)
+    {
+        try
+        {
+            var folder = CacheFolder;
+            Directory.CreateDirectory(folder);
+            var link = Path.Combine(folder, Path.GetFileName(model));
+            if (string.Equals(Path.GetFullPath(link), Path.GetFullPath(model), StringComparison.OrdinalIgnoreCase)) return model;
+            var source = new FileInfo(model);
+            if (File.Exists(link))
+            {
+                var existing = new FileInfo(link);
+                if (existing.Length == source.Length && existing.LastWriteTimeUtc == source.LastWriteTimeUtc) return link;
+                File.Delete(link);
+            }
+            if (Win32.CreateHardLink(link, model, IntPtr.Zero)) return link;
+            Log.Write($"Cache link failed ({Marshal.GetLastWin32Error()}); serving the model from its own folder.");
+        }
+        catch (Exception ex) { Log.Write("Cache link: " + ex.Message); }
+        return model;
+    }
+
     private static async Task StartLiteRtAsync(string model, string backend, IProgress<string>? progress, CancellationToken ct)
     {
         var cli = FindLiteRtCli() ?? await InstallLiteRtAsync(progress, ct).ConfigureAwait(false);
+        // LiteRT-LM writes its cache next to the model; serve the model from our own cache folder
+        // so those files land there instead of in Downloads.
+        model = LinkIntoCache(model);
         // The server accepts the file path itself as the model; only a path with a comma
         // (the separator for ",gpu") needs importing under a simple name first.
         string reference = model;

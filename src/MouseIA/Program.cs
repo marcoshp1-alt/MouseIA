@@ -29,6 +29,10 @@ internal static class Program
         }
 
         using var openSignal = new EventWaitHandle(false, EventResetMode.AutoReset, SignalName);
+        // WPF caps animations at 60 fps by default; run them at the monitor's own rate (120, 144, 240 Hz…).
+        System.Windows.Media.Animation.Timeline.DesiredFrameRateProperty.OverrideMetadata(
+            typeof(System.Windows.Media.Animation.Timeline),
+            new FrameworkPropertyMetadata { DefaultValue = Win32.MaxRefreshRate() });
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.DispatcherUnhandledException += (_, e) =>
         {

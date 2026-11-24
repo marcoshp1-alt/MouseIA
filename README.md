@@ -12,6 +12,7 @@ Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e 
 2. **Passe o mouse** sobre um parágrafo, botão, imagem ou janela: ele se ilumina.
    - **Botão esquerdo** (clicar ou arrastar): abre o cartão para perguntar.
    - **Botão direito arrastando**: traduz a área ali mesmo, por cima da tela, sem abrir o cartão.
+     Se a área tiver vários elementos (título, parágrafos, botões), cada um ganha a sua tradução com a própria borda.
    - As ações de cada botão (e da rolagem) podem ser trocadas em Configurações > Ativação.
 3. No cartão que aparece, **pergunte o que quiser** ou use os botões:
 
@@ -20,6 +21,7 @@ Traduza para qualquer idioma (até por voz), copie textos de imagens, vídeos e 
 | 🌐 **Traduzir → idioma** | Traduz o texto da seleção para mais de 110 idiomas |
 | 📋 **Copiar texto** | Reconhece o texto da imagem (offline, OCR do Windows) e copia |
 | ▦ **QR Code** | Lê QR Codes e códigos de barras e põe o botão **Abrir link** em cima do próprio código |
+| 🔍 **Google Lens** | Pesquisa a imagem no Google Lens do navegador (lá também tem o Modo IA) |
 | 🔊 **Ouvir tradução** | Traduz a seleção e lê em voz alta no idioma escolhido |
 | 📁 **Arquivo** | Imagens, PDF, vídeos, Word, PowerPoint, Excel e textos (ou arraste para o cartão) |
 
@@ -27,7 +29,9 @@ Mais coisas:
 - **Digite direto:** com o MouseIA aberto, comece a digitar para perguntar sem selecionar nada.
 - **Várias seleções:** o botão **+** junta outra área da tela na mesma pergunta.
 - **Ditado:** o 🎤 no campo de texto transforma sua fala em pergunta.
-- **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral).
+- **Visual:** efeito vidro com opacidade ajustável (Configurações > Geral). As animações rodam na taxa do seu monitor (120, 144, 240 Hz…).
+- **Vozes naturais do MouseIA:** voz feminina e masculina com som humano, offline (português, inglês, espanhol, francês, italiano e hindi).
+  O MouseIA baixa sozinho uma vez (cerca de 160 MB); nada para configurar.
 - Respostas com **Copiar**, **Ouvir** e **Tentar de novo**.
 - **Esc** ou **clique com o botão direito** fecha.
 
@@ -38,11 +42,13 @@ Em **Configurações > Inteligência artificial**:
 - **Gemini**: chave grátis em [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 - **ChatGPT**: chave da [OpenAI](https://platform.openai.com/api-keys)
 - **Claude**: chave da [Anthropic](https://platform.claude.com/settings/keys)
+- **Grok**: chave da [xAI](https://console.x.ai)
 - **IA local**: roda no seu PC e nada sai da sua rede. Dois jeitos:
   - **Arquivo de modelo**: escolha um `.gguf` ou `.litertlm` baixado do Hugging Face e pronto.
     O MouseIA baixa e instala o motor sozinho no primeiro uso, numa pasta só dele: **llama.cpp** para `.gguf`,
     **LiteRT-LM** (com Python próprio) para `.litertlm`. Usa a placa de vídeo ou o processador.
     Para perguntar sobre imagens, baixe também o arquivo **mmproj** do mesmo modelo na mesma pasta.
+    O cache do LiteRT-LM fica em **Documentos\MouseIA Cache\<nome do PC>**, e não ao lado do modelo.
   - **Servidor**: Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan… O botão **Detectar** encontra e lista os modelos.
 
 As chaves ficam guardadas **criptografadas** (DPAPI) no seu usuário do Windows.
@@ -54,7 +60,7 @@ Baixe o `MouseIA-Setup.exe` na página de **Releases** e instale. Não precisa s
 Também há a versão **portátil** (`MouseIA-Portable.exe`), que roda sem instalar.
 
 **Atualizações automáticas:** o MouseIA confere o GitHub e se atualiza sozinho (Configurações > Atualizações).
-Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.2.0`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
+Para publicar uma versão nova, crie uma *release* com a tag `vX.Y.Z` (ex.: `v1.3.0`): o GitHub Actions compila e anexa os instaladores, e os usuários recebem.
 
 Requer Windows 10 (versão 2004) ou mais novo, 64 bits.
 

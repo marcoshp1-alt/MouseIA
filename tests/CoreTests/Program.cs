@@ -19,7 +19,7 @@ static class P
     {
         string mock = args[0]; // http://127.0.0.1:PORT
         // Point cloud providers at the mock by rewriting the request URL.
-        var tests = new[] { ProviderIds.Gemini, ProviderIds.OpenAi, ProviderIds.Claude, ProviderIds.Local };
+        var tests = new[] { ProviderIds.Gemini, ProviderIds.OpenAi, ProviderIds.Claude, ProviderIds.Grok, ProviderIds.Local };
         foreach (var provider in tests)
         {
             var req = new AiRequest
@@ -77,11 +77,21 @@ static class P
         Check(outp == "Oi <b>x</b>< fim", "think filter: " + outp);
 
         // Shake detector
+        bool Shake(int sensitivity, int legs, int stepPx, int steps, int stepMs, int dy = 0)
+        {
+            var det = new ShakeDetector { Sensitivity = sensitivity };
+            long t = 0; int px = 800, py = 300; bool hit = false;
+            for (int leg = 0; leg < legs && !hit; leg++)
+                for (int st = 0; st < steps && !hit; st++) { px += (leg % 2 == 0 ? stepPx : -stepPx); py += dy; t += stepMs; hit |= det.Add(px, py, t); }
+            return hit;
+        }
+        Check(Shake(5, 7, 15, 10, 8), "normal shake detected (sens 5)");
+        Check(!Shake(1, 7, 15, 10, 8), "same shake NOT enough at sens 1");
+        Check(Shake(1, 8, 22, 9, 8), "strong fast shake works at sens 1");
+        Check(Shake(10, 5, 8, 7, 10), "light shake at sens 10");
+        Check(!Shake(5, 8, 15, 10, 8, dy: 12), "diagonal scribble ignored");
         var d = new ShakeDetector { Sensitivity = 5 };
         bool shook = false; long t0 = 0; int x = 500;
-        for (int leg = 0; leg < 6 && !shook; leg++)
-            for (int s = 0; s < 8 && !shook; s++) { x += (leg % 2 == 0 ? 12 : -12); t0 += 10; shook |= d.Add(x, 300, t0); }
-        Check(shook, "shake detected");
         d = new ShakeDetector { Sensitivity = 5 }; bool falsePos = false; t0 = 0; x = 0;
         for (int i = 0; i < 300; i++) { x += 4; t0 += 8; falsePos |= d.Add(x, 300 + (i % 3), t0); } // straight line
         for (int leg = 0; leg < 6; leg++) for (int s = 0; s < 2; s++) { x += (leg % 2 == 0 ? 6 : -6); t0 += 10; falsePos |= d.Add(x, 300, t0); } // jitter
@@ -89,6 +99,21 @@ static class P
         d = new ShakeDetector { Sensitivity = 5 }; shook = false; t0 = 0; x = 500;
         for (int leg = 0; leg < 6 && !shook; leg++) { for (int s = 0; s < 8 && !shook; s++) { x += (leg % 2 == 0 ? 12 : -12); t0 += 10; shook |= d.Add(x, 300, t0); } t0 += 400; }
         Check(!shook, "slow back-and-forth (with pauses) ignored");
+        Check(!Shake(5, 7, 15, 10, 30), "slow wide waving ignored");
+        // Text blocks: a title, a two-line paragraph and two buttons on one row become 4 blocks.
+        OcrBox W(string t, double x, double y, double w, double h = 20) => new(t, x, y, w, h);
+        var pieces = new List<OcrBox>();
+        pieces.AddRange(TextBlocks.SplitLine(new[] { W("Big", 10, 10, 60, 40), W("Title", 80, 10, 100, 40) }));
+        pieces.AddRange(TextBlocks.SplitLine(new[] { W("first", 10, 80, 50), W("line", 66, 80, 40) }));
+        pieces.AddRange(TextBlocks.SplitLine(new[] { W("second", 10, 104, 60), W("line", 76, 104, 40) }));
+        pieces.AddRange(TextBlocks.SplitLine(new[] { W("Cancel", 10, 200, 60), W("OK", 300, 200, 30) }));
+        var grouped = TextBlocks.Group(pieces);
+        Check(grouped.Count == 4, $"text blocks grouped ({grouped.Count})");
+        Check(grouped.Any(b => b.Text == "first line\nsecond line" && b.Height > 40), "paragraph lines joined");
+        Check(grouped.Any(b => b.Text == "Big Title"), "title kept apart");
+        Check(grouped.Any(b => b.Text == "OK") && grouped.Any(b => b.Text == "Cancel"), "separate buttons split");
+        Check(AppSettings.IsAction("lens"), "lens action");
+        Check(ModelCatalog.ModelsFor(new AppSettings { Provider = "grok", Quality = "smart" }).SequenceEqual(new[] { "grok-4.7", "grok-4.5" }), "grok models");
 
         // Languages
         Check(Languages.FromCulture(new System.Globalization.CultureInfo("pt-BR")).Code == "pt-BR", "culture pt-BR");

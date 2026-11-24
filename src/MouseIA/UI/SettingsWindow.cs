@@ -450,6 +450,7 @@ internal sealed class SettingsWindow : Window
                      (ProviderIds.Gemini, Theme.Glyph.Cloud, "Gemini", Loc.T("gemini_help")),
                      (ProviderIds.OpenAi, Theme.Glyph.Cloud, "ChatGPT", Loc.T("openai_help")),
                      (ProviderIds.Claude, Theme.Glyph.Cloud, "Claude", Loc.T("claude_help")),
+                     (ProviderIds.Grok, Theme.Glyph.Cloud, "Grok", Loc.T("grok_help")),
                      (ProviderIds.Local, Theme.Glyph.Pc, Loc.T("local_ai"), Loc.T("local_help")),
                  })
         {
@@ -490,6 +491,7 @@ internal sealed class SettingsWindow : Window
         {
             ProviderIds.OpenAi => ("https://platform.openai.com/api-keys", "sk-..."),
             ProviderIds.Claude => ("https://platform.claude.com/settings/keys", "sk-ant-..."),
+            ProviderIds.Grok => ("https://console.x.ai", "xai-..."),
             _ => ("https://aistudio.google.com/apikey", "AIza..."),
         };
         var key = new SecretField(keyHint, _draft.KeyFor(provider));
@@ -499,6 +501,7 @@ internal sealed class SettingsWindow : Window
             {
                 case ProviderIds.OpenAi: _draft.OpenAiKey = key.Value; break;
                 case ProviderIds.Claude: _draft.ClaudeKey = key.Value; break;
+                case ProviderIds.Grok: _draft.GrokKey = key.Value; break;
                 default: _draft.GeminiKey = key.Value; break;
             }
             Changed();
@@ -990,7 +993,7 @@ internal sealed class SettingsWindow : Window
                 .OrderBy(v => LanguageName(v.Language), StringComparer.CurrentCulture)
                 .ThenByDescending(v => v.Natural)
                 .ThenBy(v => v.Name)
-                .Select(v => new Picker.Item(v.Id, v.Label,
+                .Select(v => new Picker.Item(v.Id, v.Label, v.Language == "mul" ? Loc.T("voice_neural_detail") :
                     LanguageName(v.Language) + (v.Natural ? " · " + Loc.T("voice_natural") : "") + (v.Sapi ? " · SAPI" : ""))));
             if (_draft.VoiceId != "auto" && voices.All(v => v.Id != _draft.VoiceId)) _draft.VoiceId = "auto";
             voicePicker.SetItems(items, _draft.VoiceId);
@@ -1017,7 +1020,7 @@ internal sealed class SettingsWindow : Window
         testVoice.Click += async () =>
         {
             var chosen = SpeechService.AllVoices().FirstOrDefault(v => v.Id == _draft.VoiceId);
-            var lang = chosen?.Language is { Length: > 0 } l ? l : (Loc.IsPortuguese ? "pt-BR" : "en-US");
+            var lang = chosen?.Language is { Length: > 0 } l && l != "mul" ? l : (Loc.IsPortuguese ? "pt-BR" : "en-US");
             var sample = lang.StartsWith("pt", StringComparison.OrdinalIgnoreCase) ? "Olá! Eu sou o MouseIA." :
                 lang.StartsWith("en", StringComparison.OrdinalIgnoreCase) ? "Hi! I'm MouseIA." : Loc.T("voice_sample");
             try
@@ -1036,6 +1039,44 @@ internal sealed class SettingsWindow : Window
         var adapter = Link(Loc.T("natural_voices_link"), "https://github.com/gexgd0419/NaturalVoiceSAPIAdapter");
         adapter.Margin = new Thickness(0, 4, 0, 0);
         naturalHelp.Children.Add(adapter);
+
+        // MouseIA's own natural voices (female and male), downloaded once.
+        var neuralStatus = Ui.Label("", 12, Theme.Muted);
+        neuralStatus.Margin = new Thickness(0, 0, 0, 8);
+        var neuralDownload = new SecondaryButton(Loc.T("neural_download"), Theme.Glyph.Add);
+        neuralDownload.Click += async () =>
+        {
+            var ok = await NeuralVoices.EnsureInstalledAsync();
+            if (ok) LoadVoices();
+            else neuralStatus.Text = Loc.T("neural_failed");
+        };
+        bool wasInstalled = NeuralVoices.Installed;
+        void ShowNeural()
+        {
+            if (NeuralVoices.Installing)
+                neuralStatus.Text = Loc.Format("neural_downloading", (int)Math.Round(Math.Max(0, NeuralVoices.Progress) * 100));
+            else if (NeuralVoices.Installed)
+                neuralStatus.Text = Loc.T("neural_ready");
+            else if (!neuralStatus.Text.Equals(Loc.T("neural_failed")))
+                neuralStatus.Text = Loc.T("neural_missing");
+            neuralDownload.Visibility = NeuralVoices.Installed || NeuralVoices.Installing ? Visibility.Collapsed : Visibility.Visible;
+            if (NeuralVoices.Installed && !wasInstalled)
+            {
+                wasInstalled = true;
+                LoadVoices();
+            }
+        }
+        ShowNeural();
+        var neuralTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        neuralTimer.Tick += (_, _) => ShowNeural();
+        page.Loaded += (_, _) => neuralTimer.Start();
+        page.Unloaded += (_, _) => neuralTimer.Stop();
+        var neuralBlock = new StackPanel();
+        neuralBlock.Children.Add(neuralStatus);
+        neuralBlock.Children.Add(neuralDownload);
+        page.Children.Add(Section(
+            ToggleRow(Loc.T("neural_voices"), Loc.T("neural_voices_help"), _draft.NaturalVoices, v => { _draft.NaturalVoices = v; Changed(); }),
+            neuralBlock));
 
         page.Children.Add(Section(
             Field(Loc.T("translate_to"), Loc.T("translate_to_help"), target),
@@ -1120,7 +1161,9 @@ internal sealed class SettingsWindow : Window
         folder.Click += () => OpenUrl(AppSettings.DefaultFolder);
         var ocr = Ui.Label(Loc.Format("ocr_languages", SafeOcrLanguages()), 12, Theme.Muted);
         ocr.Margin = new Thickness(0, 0, 0, 10);
-        page.Children.Add(Section(ocr, folder));
+        var cache = new SecondaryButton(Loc.T("open_cache_folder"), Theme.Glyph.Folder) { Margin = new Thickness(0, 8, 0, 0) };
+        cache.Click += () => { try { System.IO.Directory.CreateDirectory(LocalEngine.CacheFolder); } catch (Exception) { } OpenUrl(LocalEngine.CacheFolder); };
+        page.Children.Add(Section(ocr, folder, cache));
         return page;
     }
 

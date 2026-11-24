@@ -60,6 +60,8 @@ public static class ModelCatalog
         [ProviderIds.Gemini] = new[] { "gemini-flash-lite-latest", "gemini-3.6-flash", "gemini-pro-latest" },
         [ProviderIds.OpenAi] = new[] { "gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol" },
         [ProviderIds.Claude] = new[] { "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5" },
+        // xAI lists one current chat model; the previous flagship is the fallback.
+        [ProviderIds.Grok] = new[] { "grok-4.5", "grok-4.7", "grok-4.7" },
     };
 
     public static int TierOf(string quality) => quality switch { "smart" => 2, "balanced" => 1, _ => 0 };
@@ -71,7 +73,9 @@ public static class ModelCatalog
             return new[] { string.IsNullOrWhiteSpace(settings.LocalModel) ? "local-model" : settings.LocalModel };
         var tiers = Tiers[settings.Provider];
         var list = new List<string>();
-        for (int tier = TierOf(settings.Quality); tier >= 0; tier--) list.Add(tiers[tier]);
+        for (int tier = TierOf(settings.Quality); tier >= 0; tier--)
+            if (!list.Contains(tiers[tier])) list.Add(tiers[tier]);
+        if (settings.Provider == ProviderIds.Grok && !list.Contains("grok-4.5")) list.Add("grok-4.5");
         return list;
     }
 
@@ -79,6 +83,7 @@ public static class ModelCatalog
     {
         ProviderIds.OpenAi => "ChatGPT",
         ProviderIds.Claude => "Claude",
+        ProviderIds.Grok => "Grok",
         ProviderIds.Local => "IA local",
         _ => "Gemini",
     };
@@ -220,6 +225,11 @@ public static class AiClient
                 body = BuildAnthropic(r, model);
                 headers.Add(("x-api-key", r.ApiKey));
                 headers.Add(("anthropic-version", "2023-06-01"));
+                break;
+            case ProviderIds.Grok:
+                url = "https://api.x.ai/v1/chat/completions";
+                body = BuildChatCompletions(r, model, maxTokensName: "max_completion_tokens");
+                headers.Add(("Authorization", "Bearer " + r.ApiKey));
                 break;
             case ProviderIds.Local:
                 url = LocalChatUrl(r.BaseUrl);
@@ -390,11 +400,11 @@ public static class AiClient
     });
 
     /// <summary>OpenAI-compatible Chat Completions (Ollama, LM Studio, llama.cpp, LiteRT-LM, Jan, vLLM).</summary>
-    private static byte[] BuildChatCompletions(AiRequest r, string model) => Json(w =>
+    private static byte[] BuildChatCompletions(AiRequest r, string model, string maxTokensName = "max_tokens") => Json(w =>
     {
         w.WriteString("model", model);
         w.WriteBoolean("stream", true);
-        w.WriteNumber("max_tokens", r.MaxOutputTokens);
+        w.WriteNumber(maxTokensName, r.MaxOutputTokens);
         w.WriteStartArray("messages");
         w.WriteStartObject();
         w.WriteString("role", "system");
@@ -476,6 +486,7 @@ public static class AiClient
                 return "";
             }
             case ProviderIds.Local:
+            case ProviderIds.Grok:
             {
                 if (root.TryGetProperty("error", out var err))
                 {

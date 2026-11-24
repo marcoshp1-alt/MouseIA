@@ -42,6 +42,13 @@ class H(BaseHTTPRequestHandler):
             if c[0]["source"]["data"]!="QUJD" or c[1]["text"]!="olá" or body["system"]!="sys" or not body["max_tokens"]: errs.append("body")
             if errs: return self.send(400, json.dumps({"error":{"message":",".join(errs)}}), "application/json")
             return self.send(200, sse([{"type":"message_start"},{"type":"content_block_delta","delta":{"type":"text_delta","text":"Olá, "}},{"type":"content_block_delta","delta":{"type":"text_delta","text":"mundo!"}},{"type":"message_delta","delta":{"stop_reason":"end_turn"}}]))
+        if prov == "grok":
+            if q["orig"][0] != "https://api.x.ai/v1/chat/completions": errs.append("url")
+            if h.get("Authorization") != "Bearer k": errs.append("auth")
+            m = body["messages"]
+            if m[0]["role"]!="system" or m[1]["content"][0]["image_url"]["url"]!="data:image/jpeg;base64,QUJD" or m[1]["content"][1]["text"]!="olá" or "max_completion_tokens" not in body: errs.append("body")
+            if errs: return self.send(400, json.dumps({"error":{"message":",".join(errs)}}), "application/json")
+            return self.send(200, sse([{"choices":[{"delta":{"content":"Olá, "}}]},{"choices":[{"delta":{"content":"mundo!"},"finish_reason":"stop"}]}], done=True))
         if prov == "local":
             if body["model"] == "missing": return self.send(404, json.dumps({"error":{"message":"model 'missing' not found"}}), "application/json")
             if body["model"] == "badkey": return self.send(401, json.dumps({"error":"unauthorized"}), "application/json")

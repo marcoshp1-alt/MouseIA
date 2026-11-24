@@ -64,6 +64,7 @@ internal sealed class AppController : IDisposable
         StartupRegistration.Apply(Settings.StartWithWindows);
 
         StartUpdateChecks();
+        StartNaturalVoices();
 
         if (!Settings.FirstRunDone)
         {
@@ -238,6 +239,20 @@ internal sealed class AppController : IDisposable
 
     // ---- updates ----
 
+    /// <summary>MouseIA's natural voices download quietly in the background, once.</summary>
+    private void StartNaturalVoices()
+    {
+        Services.SpeechService.UseNeuralVoices = Settings.NaturalVoices;
+        if (!Settings.NaturalVoices || Services.NeuralVoices.Installed) return;
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (Settings.NaturalVoices) _ = Services.NeuralVoices.EnsureInstalledAsync();
+        };
+        timer.Start();
+    }
+
     private void StartUpdateChecks()
     {
         _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(6) };
@@ -379,6 +394,7 @@ internal sealed class AppController : IDisposable
         ApplyShake();
         StartupRegistration.Apply(Settings.StartWithWindows);
         if (modelChanged) Services.LocalEngine.Stop(); // the next question starts the new model
+        Services.SpeechService.UseNeuralVoices = Settings.NaturalVoices;
         if (languageChanged)
         {
             // The settings window rebuilds itself; menus and the pointer read the language when they open.

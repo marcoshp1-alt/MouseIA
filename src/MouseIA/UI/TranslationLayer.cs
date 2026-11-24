@@ -33,9 +33,19 @@ internal sealed class TranslationLayer : Grid
     private readonly StringBuilder _translation = new();
     private readonly DispatcherTimer _fit;
     private LanguageInfo _target;
+    private readonly string? _source;
+    private readonly TaskCompletionSource<string> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public TranslationLayer(OverlayWindow host, AppSettings settings, BitmapSource image, Rect area, bool speak)
+    /// <summary>A few translations at a time, so a page full of blocks doesn't flood the AI.</summary>
+    private static readonly SemaphoreSlim Gate = new(3);
+
+    /// <summary>Completes with the translated text (empty if it failed or was closed).</summary>
+    public Task<string> Done => _done.Task;
+
+    /// <param name="source">Text already recognized for this block; null to recognize it here.</param>
+    public TranslationLayer(OverlayWindow host, AppSettings settings, BitmapSource image, Rect area, bool speak, string? source = null)
     {
+        _source = source;
         _host = host;
         _settings = settings;
         _image = image;
@@ -48,12 +58,12 @@ internal sealed class TranslationLayer : Grid
         // Glass: the blurred screen behind the area, so the original text disappears under it.
         var backdrop = new Image
         {
-            Source = host.Shot.Image,
+            Source = host.Frosted,
             Stretch = Stretch.Fill,
             Width = host.ScreenWidthDip,
             Height = host.ScreenHeightDip,
-            Effect = new BlurEffect { Radius = 30, RenderingBias = RenderingBias.Performance },
         };
+        RenderOptions.SetBitmapScalingMode(backdrop, BitmapScalingMode.HighQuality);
         var backdropHost = new Canvas { ClipToBounds = true };
         Canvas.SetLeft(backdrop, -area.X);
         Canvas.SetTop(backdrop, -area.Y);
@@ -149,7 +159,7 @@ internal sealed class TranslationLayer : Grid
     {
         double size = 22;
         double width = Math.Max(40, Width - 20);
-        while (size > 11)
+        while (size > 10)
         {
             _text.FontSize = size;
             _text.Measure(new Size(width, double.PositiveInfinity));
@@ -160,9 +170,18 @@ internal sealed class TranslationLayer : Grid
 
     private async Task RunAsync(FrameworkElement typing, double areaHeight)
     {
-        string source;
-        try { source = await Task.Run(() => OcrService.RecognizeAsync(_image)); }
-        catch (Exception) { source = ""; }
+        try { await RunCoreAsync(typing, areaHeight); }
+        finally { _done.TrySetResult(MiniMarkdown.ToPlain(_translation.ToString()).Trim()); }
+    }
+
+    private async Task RunCoreAsync(FrameworkElement typing, double areaHeight)
+    {
+        string source = _source ?? "";
+        if (_source == null)
+        {
+            try { source = await Task.Run(() => OcrService.RecognizeAsync(_image)); }
+            catch (Exception) { source = ""; }
+        }
 
         if (!_settings.HasAi)
         {
@@ -174,12 +193,16 @@ internal sealed class TranslationLayer : Grid
         }
 
         var images = new List<string>();
-        bool useImage = source.Length == 0 || _settings.Provider != ProviderIds.Local;
+        // A block that was already read goes as text only (faster); a whole area also sends the picture.
+        bool useImage = source.Length == 0 || (_source == null && _settings.Provider != ProviderIds.Local);
         if (useImage) images.Add(await Task.Run(() => ImageUtil.ToJpegBase64(_image, 1280)));
         var system = Prompts.TranslateSystem(_target);
         _fit.Start();
+        bool entered = false, speakAfter = false;
         try
         {
+            await Gate.WaitAsync(_cts.Token);
+            entered = true;
             var text = await StreamAsync(system, Prompts.TranslateRequest(_target, source, useImage), images, typing);
             if (source.Length > 0 && Prompts.LooksUntranslated(source, text))
             {
@@ -190,7 +213,7 @@ internal sealed class TranslationLayer : Grid
             _fit.Stop();
             Fit(areaHeight);
             _tools.Visibility = Visibility.Visible;
-            if (_speak) await SpeakAsync();
+            speakAfter = _speak;
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -202,6 +225,11 @@ internal sealed class TranslationLayer : Grid
             _text.Text = ex is AiException ai ? Shorten(ai.Detail) : ex.Message;
             _tools.Visibility = Visibility.Visible;
         }
+        finally
+        {
+            if (entered) Gate.Release();
+        }
+        if (speakAfter) await SpeakAsync();
     }
 
     private async Task<string> StreamAsync(string system, string request, IReadOnlyList<string> images, FrameworkElement typing)
