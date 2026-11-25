@@ -52,6 +52,11 @@ Em **Configurações > Inteligência artificial**:
 - **ChatGPT**: chave da [OpenAI](https://platform.openai.com/api-keys)
 - **Claude**: chave da [Anthropic](https://platform.claude.com/settings/keys)
 - **Grok**: chave da [xAI](https://console.x.ai)
+- **OpenCode Zen**: chave da [Console](https://opencode.ai/console) (`oc_sk_...`), pagamento por uso
+- **OpenCode Go**: a mesma chave, de um espaço de trabalho com plano Go; o app já manda o cabeçalho de sessão que ele exige
+- **Compatível com OpenAI**: qualquer serviço com API no formato da OpenAI (OpenRouter, Groq, DeepSeek, um servidor seu):
+  informe o endereço (ex.: `https://api.openai.com/v1`), a chave se houver, e escolha o modelo em **Listar modelos**
+  ou cole o ID. Se o modelo não tiver visão, a pergunta é refeita sem a imagem em vez de dar erro.
 - **IA local**: roda no seu PC e nada sai da sua rede. Dois jeitos:
   - **Arquivo de modelo**: escolha um `.gguf` ou `.litertlm` baixado do Hugging Face e pronto.
     O MouseIA baixa e instala o motor sozinho no primeiro uso, numa pasta só dele: **llama.cpp** para `.gguf`,

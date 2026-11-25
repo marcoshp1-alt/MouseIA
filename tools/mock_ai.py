@@ -49,6 +49,28 @@ class H(BaseHTTPRequestHandler):
             if m[0]["role"]!="system" or m[1]["content"][0]["image_url"]["url"]!="data:image/jpeg;base64,QUJD" or m[1]["content"][1]["text"]!="olá" or "max_completion_tokens" not in body: errs.append("body")
             if errs: return self.send(400, json.dumps({"error":{"message":",".join(errs)}}), "application/json")
             return self.send(200, sse([{"choices":[{"delta":{"content":"Olá, "}}]},{"choices":[{"delta":{"content":"mundo!"},"finish_reason":"stop"}]}], done=True))
+        if prov in ("opencode-zen", "opencode-go"):
+            want = ("https://opencode.ai/inference/openai/v1/chat/completions" if prov == "opencode-zen"
+                    else "https://opencode.ai/inference/go/openai/v1/chat/completions")
+            if q["orig"][0] != want: errs.append("url")
+            if h.get("Authorization") != "Bearer k": errs.append("auth")
+            if not h.get("x-opencode-session"): errs.append("session")
+            m = body["messages"]
+            if m[0]["role"]!="system" or m[1]["content"][1]["text"]!="olá" or "max_tokens" not in body: errs.append("body")
+            if errs: return self.send(400, json.dumps({"error":{"message":",".join(errs)}}), "application/json")
+            return self.send(200, sse([{"choices":[{"delta":{"content":"Olá, "}}]},{"choices":[{"delta":{"content":"mundo!"},"finish_reason":"stop"}]}], done=True))
+        if prov == "compatible":
+            orig = q.get("orig", [self.path])[0]
+            if not orig.endswith("/chat/completions"): errs.append("url")
+            if h.get("Authorization") != "Bearer k": errs.append("auth")
+            m = body["messages"]
+            has_img = isinstance(m[1]["content"], list)
+            # A text-only model refuses the picture; MouseIA has to retry without it.
+            if body["model"] == "textonly" and has_img:
+                return self.send(400, json.dumps({"error":{"message":"this model does not support image input"}}), "application/json")
+            if has_img and m[1]["content"][0]["image_url"]["url"] != "data:image/jpeg;base64,QUJD": errs.append("img")
+            if errs: return self.send(400, json.dumps({"error":{"message":",".join(errs)}}), "application/json")
+            return self.send(200, sse([{"choices":[{"delta":{"content":"Olá, "}}]},{"choices":[{"delta":{"content":"mundo!"},"finish_reason":"stop"}]}], done=True))
         if prov == "local":
             if body["model"] == "missing": return self.send(404, json.dumps({"error":{"message":"model 'missing' not found"}}), "application/json")
             if body["model"] == "badkey": return self.send(401, json.dumps({"error":"unauthorized"}), "application/json")

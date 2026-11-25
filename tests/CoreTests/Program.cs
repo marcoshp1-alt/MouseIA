@@ -19,7 +19,8 @@ static class P
     {
         string mock = args[0]; // http://127.0.0.1:PORT
         // Point cloud providers at the mock by rewriting the request URL.
-        var tests = new[] { ProviderIds.Gemini, ProviderIds.OpenAi, ProviderIds.Claude, ProviderIds.Grok, ProviderIds.Local };
+        var tests = new[] { ProviderIds.Gemini, ProviderIds.OpenAi, ProviderIds.Claude, ProviderIds.Grok, ProviderIds.Local,
+            ProviderIds.OpenCodeZen, ProviderIds.OpenCodeGo, ProviderIds.Compatible };
         foreach (var provider in tests)
         {
             var req = new AiRequest
@@ -31,6 +32,15 @@ static class P
             };
             var text = await RunViaMock(req, mock, provider);
             Check(text == "Olá, mundo!", $"{provider} stream -> '{text}'");
+        }
+        // A compatible endpoint whose model can't read images: the answer must still come.
+        {
+            var req = new AiRequest { Provider = ProviderIds.Compatible, ApiKey = "k", Models = new[] { "textonly" },
+                BaseUrl = mock + "/compatible/v1", SystemPrompt = "s", History = new[] { new ChatTurn(true, "olá") },
+                ImagesJpegBase64 = new[] { "QUJD" } };
+            var sb = new StringBuilder();
+            await AiClient.StreamAsync(req, t => sb.Append(t), CancellationToken.None);
+            Check(sb.ToString() == "Olá, mundo!", "image refused -> retried without it ('" + sb + "')");
         }
         // Fallback: first model 404s, second answers.
         {
@@ -134,6 +144,20 @@ static class P
         var loaded = AppSettings.Load(path, new PlainProtector());
         Check(loaded.Provider == "claude" && loaded.ClaudeKey == "sk-ant-x" && loaded.LocalModel == "gemma4:e4b" && loaded.HasAi, "settings round trip");
         Check(!File.ReadAllText(path).Contains("\"claudeKey\""), "plain key fields not serialized");
+        var goSettings = new AppSettings { Provider = ProviderIds.OpenCodeGo, GoKey = "go-x", GoModel = "m-1" };
+        goSettings.Save(path, new PlainProtector());
+        var goLoaded = AppSettings.Load(path, new PlainProtector());
+        Check(goLoaded.Provider == ProviderIds.OpenCodeGo && goLoaded.GoKey == "go-x" && goLoaded.GoModel == "m-1" && goLoaded.HasAi,
+            "opencode-go settings round trip");
+        Check(ModelCatalog.ModelsFor(goLoaded).SequenceEqual(new[] { "m-1" }), "chosen model used as is");
+        Check(new AppSettings { Provider = ProviderIds.Compatible, CompatibleUrl = "https://x/v1", CompatibleModel = "m" }.HasAi,
+            "compatible needs only address and model");
+        Check(!new AppSettings { Provider = ProviderIds.Compatible }.HasAi, "compatible without address has no AI");
+        Check(AiClient.ModelsUrlFor(ProviderIds.OpenCodeZen, "") == "https://opencode.ai/inference/v1/models" &&
+              AiClient.ModelsUrlFor(ProviderIds.OpenCodeGo, "") == "https://opencode.ai/inference/go/v1/models" &&
+              AiClient.ModelsUrlFor(ProviderIds.Compatible, "http://x:1/v1") == "http://x:1/v1/models", "endpoints");
+        Check(AiClient.IsPrivateHost("http://192.168.100.3:8080/v1") && !AiClient.IsPrivateHost("https://api.openai.com/v1"),
+            "private host detection");
         File.WriteAllText(path, "{garbage"); Check(AppSettings.Load(path, new PlainProtector()).Provider == "gemini", "damaged settings -> defaults");
 
         // Models

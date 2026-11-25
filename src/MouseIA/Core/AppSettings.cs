@@ -27,6 +27,18 @@ public static class ProviderIds
     public const string Claude = "claude";
     public const string Local = "local";
     public const string Grok = "grok";
+    /// <summary>OpenCode's pay-as-you-go gateway (opencode.ai/zen).</summary>
+    public const string OpenCodeZen = "opencode-zen";
+    /// <summary>OpenCode's subscription plan gateway (opencode.ai/zen/go).</summary>
+    public const string OpenCodeGo = "opencode-go";
+    /// <summary>Any other endpoint that speaks the OpenAI Chat Completions API.</summary>
+    public const string Compatible = "compatible";
+
+    /// <summary>Providers reached through the OpenAI Chat Completions API.</summary>
+    public static readonly string[] ChatCompletions = { Local, Grok, OpenCodeZen, OpenCodeGo, Compatible };
+
+    /// <summary>Providers the user sets up with an address and a model, not a fixed one.</summary>
+    public static bool IsCustomEndpoint(string provider) => provider is OpenCodeZen or OpenCodeGo or Compatible;
 }
 
 public sealed class AppSettings
@@ -38,9 +50,21 @@ public sealed class AppSettings
     [JsonIgnore] public string ClaudeKey { get; set; } = "";
     [JsonIgnore] public string GrokKey { get; set; } = "";
     [JsonIgnore] public string LocalKey { get; set; } = "";
+    [JsonIgnore] public string ZenKey { get; set; } = "";
+    [JsonIgnore] public string GoKey { get; set; } = "";
+    [JsonIgnore] public string CompatibleKey { get; set; } = "";
     public string Quality { get; set; } = "fast"; // fast | balanced | smart
     public string LocalUrl { get; set; } = "";
     public string LocalModel { get; set; } = "";
+    /// <summary>Model id used on OpenCode Zen.</summary>
+    public string ZenModel { get; set; } = "";
+    /// <summary>Model id used on OpenCode Go.</summary>
+    public string GoModel { get; set; } = "";
+    /// <summary>Base URL of a third-party OpenAI-compatible API, e.g. https://api.example.com/v1.</summary>
+    public string CompatibleUrl { get; set; } = "";
+    public string CompatibleModel { get; set; } = "";
+    /// <summary>Stable session id for OpenCode's gateway, so it routes and caches consistently.</summary>
+    public string OpenCodeSessionId { get; set; } = "";
     /// <summary>"file": MouseIA runs a model file itself; "server": an external server (Ollama, LM Studio…).</summary>
     public string LocalMode { get; set; } = "file";
     /// <summary>A .gguf or .litertlm file, usually downloaded from Hugging Face.</summary>
@@ -55,6 +79,9 @@ public sealed class AppSettings
     public string ClaudeKeyStored { get; set; } = "";
     public string GrokKeyStored { get; set; } = "";
     public string LocalKeyStored { get; set; } = "";
+    public string ZenKeyStored { get; set; } = "";
+    public string GoKeyStored { get; set; } = "";
+    public string CompatibleKeyStored { get; set; } = "";
 
     // Activation
     public string Hotkey { get; set; } = DefaultHotkey;
@@ -122,9 +149,14 @@ public sealed class AppSettings
     public bool UsesModelFile => Provider == ProviderIds.Local && LocalMode == "file";
 
     [JsonIgnore]
-    public bool HasAi => Provider == ProviderIds.Local
-        ? (LocalMode == "file" ? !string.IsNullOrWhiteSpace(LocalModelFile) : !string.IsNullOrWhiteSpace(LocalUrl))
-        : HasCloudKey;
+    public bool HasAi => Provider switch
+    {
+        ProviderIds.Local => LocalMode == "file" ? !string.IsNullOrWhiteSpace(LocalModelFile) : !string.IsNullOrWhiteSpace(LocalUrl),
+        // A compatible endpoint only needs an address; the key is optional and the model is picked.
+        ProviderIds.Compatible => !string.IsNullOrWhiteSpace(CompatibleUrl) && !string.IsNullOrWhiteSpace(CompatibleModel),
+        ProviderIds.OpenCodeZen or ProviderIds.OpenCodeGo => HasCloudKey && !string.IsNullOrWhiteSpace(ModelFor(Provider)),
+        _ => HasCloudKey,
+    };
 
     public string KeyFor(string provider) => provider switch
     {
@@ -133,8 +165,49 @@ public sealed class AppSettings
         ProviderIds.Claude => ClaudeKey,
         ProviderIds.Grok => GrokKey,
         ProviderIds.Local => LocalKey,
+        ProviderIds.OpenCodeZen => ZenKey,
+        ProviderIds.OpenCodeGo => GoKey,
+        ProviderIds.Compatible => CompatibleKey,
         _ => "",
     };
+
+    /// <summary>Sets a provider's key, leaving the others alone.</summary>
+    public void SetKey(string provider, string value)
+    {
+        switch (provider)
+        {
+            case ProviderIds.Gemini: GeminiKey = value; break;
+            case ProviderIds.OpenAi: OpenAiKey = value; break;
+            case ProviderIds.Claude: ClaudeKey = value; break;
+            case ProviderIds.Grok: GrokKey = value; break;
+            case ProviderIds.Local: LocalKey = value; break;
+            case ProviderIds.OpenCodeZen: ZenKey = value; break;
+            case ProviderIds.OpenCodeGo: GoKey = value; break;
+            case ProviderIds.Compatible: CompatibleKey = value; break;
+        }
+    }
+
+    /// <summary>The model id chosen for a provider whose models come from the API itself.</summary>
+    public string ModelFor(string provider) => provider switch
+    {
+        ProviderIds.OpenCodeZen => ZenModel,
+        ProviderIds.OpenCodeGo => GoModel,
+        ProviderIds.Compatible => CompatibleModel,
+        _ => "",
+    };
+
+    public void SetModel(string provider, string value)
+    {
+        switch (provider)
+        {
+            case ProviderIds.OpenCodeZen: ZenModel = value; break;
+            case ProviderIds.OpenCodeGo: GoModel = value; break;
+            case ProviderIds.Compatible: CompatibleModel = value; break;
+        }
+    }
+
+    /// <summary>The address typed by the user, for providers that don't have a fixed one.</summary>
+    public string BaseUrlFor(string provider) => provider == ProviderIds.Compatible ? CompatibleUrl : "";
 
     public AppSettings Clone()
     {
@@ -167,6 +240,9 @@ public sealed class AppSettings
                     settings.ClaudeKey = SafeUnprotect(protector, settings.ClaudeKeyStored);
                     settings.GrokKey = SafeUnprotect(protector, settings.GrokKeyStored);
                     settings.LocalKey = SafeUnprotect(protector, settings.LocalKeyStored);
+                    settings.ZenKey = SafeUnprotect(protector, settings.ZenKeyStored);
+                    settings.GoKey = SafeUnprotect(protector, settings.GoKeyStored);
+                    settings.CompatibleKey = SafeUnprotect(protector, settings.CompatibleKeyStored);
                     settings.Normalize();
                     return settings;
                 }
@@ -187,6 +263,9 @@ public sealed class AppSettings
         ClaudeKeyStored = protector.Protect(ClaudeKey.Trim());
         GrokKeyStored = protector.Protect(GrokKey.Trim());
         LocalKeyStored = protector.Protect(LocalKey.Trim());
+        ZenKeyStored = protector.Protect(ZenKey.Trim());
+        GoKeyStored = protector.Protect(GoKey.Trim());
+        CompatibleKeyStored = protector.Protect(CompatibleKey.Trim());
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions));
@@ -195,7 +274,8 @@ public sealed class AppSettings
 
     public void Normalize()
     {
-        if (Provider is not (ProviderIds.Gemini or ProviderIds.OpenAi or ProviderIds.Claude or ProviderIds.Grok or ProviderIds.Local))
+        if (Provider is not (ProviderIds.Gemini or ProviderIds.OpenAi or ProviderIds.Claude or ProviderIds.Grok or ProviderIds.Local
+            or ProviderIds.OpenCodeZen or ProviderIds.OpenCodeGo or ProviderIds.Compatible))
             Provider = ProviderIds.Gemini;
         if (Quality is not ("fast" or "balanced" or "smart")) Quality = "fast";
         ShakeSensitivity = Math.Clamp(ShakeSensitivity, 1, 10);
@@ -212,6 +292,11 @@ public sealed class AppSettings
         VoiceRate = Math.Clamp(VoiceRate, 0.5, 2.0);
         LocalUrl = (LocalUrl ?? "").Trim();
         LocalModel = (LocalModel ?? "").Trim();
+        ZenModel = (ZenModel ?? "").Trim();
+        GoModel = (GoModel ?? "").Trim();
+        CompatibleUrl = (CompatibleUrl ?? "").Trim();
+        CompatibleModel = (CompatibleModel ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(OpenCodeSessionId)) OpenCodeSessionId = "ses_" + Guid.NewGuid().ToString("n");
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = DefaultHotkey;
         SettingsHotkey = (SettingsHotkey ?? "").Trim();
         CardPositions ??= new();

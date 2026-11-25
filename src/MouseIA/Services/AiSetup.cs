@@ -15,7 +15,8 @@ internal static class AiSetup
         IReadOnlyList<string> imagesJpeg, int maxTokens, IProgress<string>? progress, CancellationToken ct)
     {
         var provider = settings.Provider;
-        string baseUrl = settings.LocalUrl;
+        // OpenCode Zen/Go have their own fixed address; a compatible endpoint uses the one typed in.
+        string baseUrl = settings.BaseUrlFor(provider) is { Length: > 0 } own ? own : settings.LocalUrl;
         IReadOnlyList<string> models = ModelCatalog.ModelsFor(settings);
         bool dropped = false;
         if (settings.UsesModelFile)
@@ -35,6 +36,7 @@ internal static class AiSetup
             Provider = provider,
             ApiKey = provider == ProviderIds.Local && settings.UsesModelFile ? "" : settings.KeyFor(provider),
             BaseUrl = baseUrl,
+            SessionId = settings.OpenCodeSessionId,
             Models = models,
             SystemPrompt = system,
             History = turns,

@@ -468,7 +468,12 @@ internal sealed class SettingsWindow : Window
                 button.BorderThickness = new Thickness(on ? 1.5 : 1);
                 button.NormalBrush = on ? Theme.B("#1A8B5CF6") : Theme.Field;
             }
-            details.Content = id == ProviderIds.Local ? LocalPanel() : CloudDetails(id);
+            details.Content = id switch
+            {
+                ProviderIds.Local => LocalPanel(),
+                ProviderIds.OpenCodeZen or ProviderIds.OpenCodeGo or ProviderIds.Compatible => CompatibleDetails(id),
+                _ => CloudDetails(id),
+            };
         }
         foreach (var (id, glyph, title, help) in new[]
                  {
@@ -476,6 +481,9 @@ internal sealed class SettingsWindow : Window
                      (ProviderIds.OpenAi, Theme.Glyph.Cloud, "ChatGPT", Loc.T("openai_help")),
                      (ProviderIds.Claude, Theme.Glyph.Cloud, "Claude", Loc.T("claude_help")),
                      (ProviderIds.Grok, Theme.Glyph.Cloud, "Grok", Loc.T("grok_help")),
+                     (ProviderIds.OpenCodeZen, Theme.Glyph.Cloud, "OpenCode Zen", Loc.T("oczen_help")),
+                     (ProviderIds.OpenCodeGo, Theme.Glyph.Cloud, "OpenCode Go", Loc.T("ocgo_help")),
+                     (ProviderIds.Compatible, Theme.Glyph.Cloud, Loc.T("compatible_ai"), Loc.T("compatible_help")),
                      (ProviderIds.Local, Theme.Glyph.Pc, Loc.T("local_ai"), Loc.T("local_help")),
                  })
         {
@@ -522,13 +530,7 @@ internal sealed class SettingsWindow : Window
         var key = new SecretField(keyHint, _draft.KeyFor(provider));
         void StoreKey()
         {
-            switch (provider)
-            {
-                case ProviderIds.OpenAi: _draft.OpenAiKey = key.Value; break;
-                case ProviderIds.Claude: _draft.ClaudeKey = key.Value; break;
-                case ProviderIds.Grok: _draft.GrokKey = key.Value; break;
-                default: _draft.GeminiKey = key.Value; break;
-            }
+            _draft.SetKey(provider, key.Value);
             Changed();
         }
         key.Changed += StoreKey;
@@ -562,6 +564,111 @@ internal sealed class SettingsWindow : Window
             Field(Loc.Format("api_key_for", ModelCatalog.DisplayName(provider)), Loc.T("api_key_help"), keyBlock),
             Field(Loc.T("quality"), Loc.T("quality_help"), quality),
             testRow);
+    }
+
+    /// <summary>OpenCode Zen, OpenCode Go and any other OpenAI-compatible endpoint: key, address, model.</summary>
+    private FrameworkElement CompatibleDetails(string provider)
+    {
+        var fields = new List<UIElement>();
+        var key = new SecretField(provider == ProviderIds.Compatible ? Loc.T("optional") : "sk-...", _draft.KeyFor(provider));
+        key.Changed += () => { _draft.SetKey(provider, key.Value); Changed(); };
+        var keyBlock = new StackPanel();
+        keyBlock.Children.Add(key);
+        if (provider != ProviderIds.Compatible)
+        {
+            var keyLink = Link(Loc.T("get_key"), "https://opencode.ai/auth");
+            keyLink.Margin = new Thickness(0, 6, 0, 0);
+            keyBlock.Children.Add(keyLink);
+        }
+        if (provider == ProviderIds.Compatible)
+        {
+            var url = new GlassField(Loc.T("base_url_hint"), _draft.CompatibleUrl);
+            url.Box.TextChanged += (_, _) => { _draft.CompatibleUrl = url.Text.Trim(); Changed(); };
+            fields.Add(Field(Loc.T("base_url"), Loc.T("base_url_help"), url));
+            fields.Add(Field(Loc.Format("api_key_for", ModelCatalog.DisplayName(provider)), Loc.T("compatible_key_help"), keyBlock));
+        }
+        else
+        {
+            fields.Add(Field(Loc.Format("api_key_for", ModelCatalog.DisplayName(provider)), Loc.T("api_key_help"), keyBlock));
+        }
+
+        var model = new GlassField(Loc.T("model_hint"), _draft.ModelFor(provider));
+        model.Box.TextChanged += (_, _) => { _draft.SetModel(provider, model.Text.Trim()); Changed(); };
+        var found = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var status = Ui.Label("", 12.5, Theme.Muted);
+        status.Margin = new Thickness(12, 0, 0, 0);
+        status.TextWrapping = TextWrapping.Wrap;
+        status.MaxWidth = 380;
+        async Task LoadModels()
+        {
+            status.Foreground = Theme.Muted;
+            status.Text = Loc.T("searching");
+            found.Children.Clear();
+            if (provider == ProviderIds.Compatible && string.IsNullOrWhiteSpace(_draft.CompatibleUrl))
+            {
+                status.Foreground = Theme.Faint;
+                status.Text = Loc.T("base_url_first");
+                return;
+            }
+            IReadOnlyList<string>? names = null;
+            try
+            {
+                var url = AiClient.ModelsUrlFor(provider, _draft.CompatibleUrl);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                names = await AiClient.ListModelsAsync(url, _draft.KeyFor(provider),
+                    provider == ProviderIds.Compatible ? "" : _draft.OpenCodeSessionId, cts.Token);
+            }
+            catch (Exception)
+            {
+                names = null;
+            }
+            if (names == null || names.Count == 0)
+            {
+                status.Foreground = Theme.Danger;
+                status.Text = Loc.T("no_models_list");
+                return;
+            }
+            status.Foreground = Theme.Success;
+            status.Text = Loc.Format("models_found", names.Count);
+            foreach (var name in names.Take(80))
+            {
+                var chip = new SecondaryButton(name, Theme.Glyph.Cloud) { Height = 30, Margin = new Thickness(0, 0, 8, 6) };
+                var captured = name;
+                chip.Click += () =>
+                {
+                    model.Text = captured;
+                    _draft.SetModel(provider, captured);
+                    Changed();
+                };
+                found.Children.Add(chip);
+            }
+        }
+        var list = new SecondaryButton(Loc.T("list_models"), Theme.Glyph.Search);
+        list.Click += () => _ = LoadModels();
+        var listRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        listRow.Children.Add(list);
+        listRow.Children.Add(status);
+        var modelBlock = new StackPanel();
+        modelBlock.Children.Add(model);
+        modelBlock.Children.Add(listRow);
+        modelBlock.Children.Add(found);
+        fields.Add(Field(Loc.T("model"), provider == ProviderIds.Compatible ? Loc.T("model_help_compatible") : Loc.T("model_help"), modelBlock));
+
+        var testStatus = Ui.Label("", 12.5, Theme.Muted);
+        testStatus.Margin = new Thickness(12, 0, 0, 0);
+        var test = new SecondaryButton(Loc.T("test_connection"), Theme.Glyph.Play);
+        test.Click += () => _ = TestAsync(testStatus);
+        var testRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        testRow.Children.Add(test);
+        testRow.Children.Add(testStatus);
+        fields.Add(testRow);
+
+        // A saved key (or an address already typed) is enough to fill the model list right away.
+        bool canList = provider == ProviderIds.Compatible
+            ? !string.IsNullOrWhiteSpace(_draft.CompatibleUrl)
+            : !string.IsNullOrWhiteSpace(_draft.KeyFor(provider));
+        if (canList) Dispatcher.BeginInvoke(() => _ = LoadModels());
+        return Section(fields.ToArray());
     }
 
     private FrameworkElement ServerDetails()
@@ -1299,7 +1406,13 @@ internal sealed class SettingsWindow : Window
         if (!_draft.HasAi)
         {
             status.Foreground = Theme.Danger;
-            status.Text = Loc.T(_draft.Provider != ProviderIds.Local ? "missing_key" : _draft.LocalMode == "file" ? "engine_no_file" : "no_local_server");
+            status.Text = Loc.T(_draft.Provider switch
+            {
+                ProviderIds.Local => _draft.LocalMode == "file" ? "engine_no_file" : "no_local_server",
+                ProviderIds.Compatible => string.IsNullOrWhiteSpace(_draft.CompatibleUrl) ? "base_url_first" : "pick_model_first",
+                var p when string.IsNullOrWhiteSpace(_draft.KeyFor(p)) => "missing_key",
+                _ => "pick_model_first",
+            });
             return;
         }
         var settings = _draft.Clone();
@@ -1720,24 +1833,30 @@ internal sealed class SettingsWindow : Window
 
             // API keys
             var keys = new StackPanel();
-            foreach (var (id, name) in new[] { (ProviderIds.Gemini, "Gemini"), (ProviderIds.OpenAi, "ChatGPT (OpenAI)"), (ProviderIds.Claude, "Claude"), (ProviderIds.Grok, "Grok") })
+            foreach (var (id, name) in new[]
+                     {
+                         (ProviderIds.Gemini, "Gemini"), (ProviderIds.OpenAi, "ChatGPT (OpenAI)"), (ProviderIds.Claude, "Claude"),
+                         (ProviderIds.Grok, "Grok"), (ProviderIds.OpenCodeZen, "OpenCode Zen"), (ProviderIds.OpenCodeGo, "OpenCode Go"),
+                     })
             {
                 bool saved = !string.IsNullOrWhiteSpace(_draft.KeyFor(id));
                 var provider = id;
                 keys.Children.Add(InstalledRow(name, saved ? Loc.T("key_saved") : Loc.T("key_none"), null,
                     saved ? Loc.T("remove_key") : null, () =>
                     {
-                        switch (provider)
-                        {
-                            case ProviderIds.Gemini: _draft.GeminiKey = ""; break;
-                            case ProviderIds.OpenAi: _draft.OpenAiKey = ""; break;
-                            case ProviderIds.Claude: _draft.ClaudeKey = ""; break;
-                            case ProviderIds.Grok: _draft.GrokKey = ""; break;
-                        }
+                        _draft.SetKey(provider, "");
                         Changed();
                         Build();
                     }));
             }
+            if (!string.IsNullOrWhiteSpace(_draft.CompatibleKey))
+                keys.Children.Add(InstalledRow(ModelCatalog.DisplayName(ProviderIds.Compatible), Loc.T("key_saved"), null,
+                    Loc.T("remove_key"), () =>
+                    {
+                        _draft.SetKey(ProviderIds.Compatible, "");
+                        Changed();
+                        Build();
+                    }));
             body.Children.Add(Section(Field(Loc.T("inst_keys"), Loc.T("inst_keys_help"), keys)));
 
             // Local AI models + cache

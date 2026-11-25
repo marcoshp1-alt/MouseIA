@@ -22,12 +22,28 @@ public sealed class AiRequest
     public IReadOnlyList<string> Models { get; init; } = Array.Empty<string>();
     /// <summary>OpenAI-compatible base URL (local provider only), e.g. http://127.0.0.1:11434/v1.</summary>
     public string BaseUrl { get; init; } = "";
+    /// <summary>Stable id for gateways that route a conversation by session (OpenCode).</summary>
+    public string SessionId { get; init; } = "";
     public string SystemPrompt { get; init; } = "";
     /// <summary>Conversation, ending with the newest user turn.</summary>
     public IReadOnlyList<ChatTurn> History { get; init; } = Array.Empty<ChatTurn>();
     /// <summary>JPEG images (base64), attached to the first user turn.</summary>
     public IReadOnlyList<string> ImagesJpegBase64 { get; init; } = Array.Empty<string>();
     public int MaxOutputTokens { get; init; } = 4096;
+
+    /// <summary>The same request without pictures, for a model that can't read them.</summary>
+    public AiRequest WithoutImages() => new()
+    {
+        Provider = Provider,
+        ApiKey = ApiKey,
+        Models = Models,
+        BaseUrl = BaseUrl,
+        SessionId = SessionId,
+        SystemPrompt = SystemPrompt,
+        History = History,
+        ImagesJpegBase64 = Array.Empty<string>(),
+        MaxOutputTokens = MaxOutputTokens,
+    };
 }
 
 public enum AiErrorKind { Network, Timeout, InvalidKey, Forbidden, ModelMissing, RateLimit, NoCredit, Server, Other }
@@ -69,6 +85,12 @@ public static class ModelCatalog
     /// <summary>The chosen model followed by faster fallbacks.</summary>
     public static IReadOnlyList<string> ModelsFor(AppSettings settings)
     {
+        // Zen, Go and compatible endpoints list their own models; there is nothing to fall back to.
+        if (ProviderIds.IsCustomEndpoint(settings.Provider))
+        {
+            var chosen = settings.ModelFor(settings.Provider);
+            return string.IsNullOrWhiteSpace(chosen) ? Array.Empty<string>() : new[] { chosen };
+        }
         if (settings.Provider == ProviderIds.Local)
             return new[] { string.IsNullOrWhiteSpace(settings.LocalModel) ? "local-model" : settings.LocalModel };
         var tiers = Tiers[settings.Provider];
@@ -85,12 +107,20 @@ public static class ModelCatalog
         ProviderIds.Claude => "Claude",
         ProviderIds.Grok => "Grok",
         ProviderIds.Local => "IA local",
+        ProviderIds.OpenCodeZen => "OpenCode Zen",
+        ProviderIds.OpenCodeGo => "OpenCode Go",
+        ProviderIds.Compatible => "OpenAI compatível",
         _ => "Gemini",
     };
 }
 
 public static class AiClient
 {
+    public const string OpenCodeZenBase = "https://opencode.ai/inference";
+    public const string OpenCodeGoBase = "https://opencode.ai/inference/go";
+    /// <summary>Sent with every OpenCode request; Go refuses calls without a session.</summary>
+    public static readonly string OpenCodeSession = "ses_" + Guid.NewGuid().ToString("n");
+
     private static readonly HttpClient Cloud = CreateClient(useProxy: true);
     private static readonly HttpClient Local = CreateClient(useProxy: false);
 
@@ -134,13 +164,39 @@ public static class AiClient
     private static bool ShouldTryNextModel(AiErrorKind kind) =>
         kind is AiErrorKind.ModelMissing or AiErrorKind.RateLimit or AiErrorKind.Server or AiErrorKind.Timeout;
 
+    private static readonly string[] ImageWords = { "image", "vision", "modalit", "multimodal" };
+
     private static async Task<(string text, bool truncated)> SendOnceAsync(
         AiRequest request, string model, Action<string> onText, CancellationToken ct)
     {
+        bool emitted = false;
+        try
+        {
+            return await SendAsync(request, model, text => { emitted = true; onText(text); }, ct).ConfigureAwait(false);
+        }
+        catch (AiException ex) when (!emitted && request.ImagesJpegBase64.Count > 0 &&
+                                     Array.IndexOf(ProviderIds.ChatCompletions, request.Provider) >= 0 &&
+                                     LooksLikeImageRefusal(ex))
+        {
+            // A text-only model rejects the picture; the same question without it still answers.
+            return await SendAsync(request.WithoutImages(), model, onText, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static bool LooksLikeImageRefusal(AiException ex) =>
+        (ex.Kind is AiErrorKind.Other or AiErrorKind.ModelMissing or AiErrorKind.InvalidKey or AiErrorKind.Forbidden) &&
+        ImageWords.Any(w => ex.Detail.Contains(w, StringComparison.OrdinalIgnoreCase));
+
+    private static async Task<(string text, bool truncated)> SendAsync(
+        AiRequest request, string model, Action<string> onText, CancellationToken ct)
+    {
         using var message = BuildHttpRequest(request, model);
-        var client = request.Provider == ProviderIds.Local ? Local : Cloud;
+        // A server on this PC or in the local network must not go through the system proxy,
+        // and deserves longer timeouts, like the local models.
+        bool local = request.Provider == ProviderIds.Local || (message.RequestUri != null && IsPrivateHost(message.RequestUri));
+        var client = local ? Local : Cloud;
         // Local models may need minutes to load into memory.
-        var firstByte = request.Provider == ProviderIds.Local ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(60);
+        var firstByte = local ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(60);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(firstByte);
@@ -173,7 +229,7 @@ public static class AiClient
             var think = new ThinkFilter();
             await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             // Each read gets its own idle timeout so a stalled stream ends.
-            await foreach (var data in SseReader.ReadEventsAsync(stream, TimeSpan.FromSeconds(request.Provider == ProviderIds.Local ? 300 : 90), ct)
+            await foreach (var data in SseReader.ReadEventsAsync(stream, TimeSpan.FromSeconds(local ? 300 : 90), ct)
                                .ConfigureAwait(false))
             {
                 if (data == "[DONE]") break;
@@ -236,6 +292,24 @@ public static class AiClient
                 body = BuildChatCompletions(r, model);
                 if (!string.IsNullOrWhiteSpace(r.ApiKey)) headers.Add(("Authorization", "Bearer " + r.ApiKey));
                 break;
+            case ProviderIds.OpenCodeZen:
+                url = OpenCodeZenBase + "/openai/v1/chat/completions";
+                body = BuildChatCompletions(r, model);
+                headers.Add(("Authorization", "Bearer " + r.ApiKey));
+                headers.Add(("x-opencode-session", SessionFor(r)));
+                break;
+            case ProviderIds.OpenCodeGo:
+                url = OpenCodeGoBase + "/openai/v1/chat/completions";
+                body = BuildChatCompletions(r, model);
+                headers.Add(("Authorization", "Bearer " + r.ApiKey));
+                // The Go plan refuses anonymous calls: every request must name a session.
+                headers.Add(("x-opencode-session", SessionFor(r)));
+                break;
+            case ProviderIds.Compatible:
+                url = LocalChatUrl(r.BaseUrl);
+                body = BuildChatCompletions(r, model);
+                if (!string.IsNullOrWhiteSpace(r.ApiKey)) headers.Add(("Authorization", "Bearer " + r.ApiKey));
+                break;
             default:
                 url = $"https://generativelanguage.googleapis.com/v1beta/models/{Uri.EscapeDataString(model)}:streamGenerateContent?alt=sse";
                 body = BuildGemini(r);
@@ -268,6 +342,69 @@ public static class AiClient
     {
         var chat = LocalChatUrl(baseUrl);
         return chat[..^"/chat/completions".Length] + "/models";
+    }
+
+    /// <summary>Address a provider listens on; the user's own for a compatible endpoint.</summary>
+    public static string BaseUrlFor(string provider, string customBaseUrl) => provider switch
+    {
+        ProviderIds.OpenCodeZen => OpenCodeZenBase,
+        ProviderIds.OpenCodeGo => OpenCodeGoBase,
+        ProviderIds.Compatible => customBaseUrl,
+        _ => "",
+    };
+
+    public static string ChatUrlFor(string provider, string baseUrl) =>
+        ProviderIds.IsCustomEndpoint(provider) && provider != ProviderIds.Compatible
+            ? BaseUrlFor(provider, "") + "/openai/v1/chat/completions"
+            : LocalChatUrl(baseUrl);
+
+    public static string ModelsUrlFor(string provider, string baseUrl) =>
+        ProviderIds.IsCustomEndpoint(provider) && provider != ProviderIds.Compatible
+            ? BaseUrlFor(provider, "") + "/v1/models"
+            : LocalModelsUrl(baseUrl);
+
+    /// <summary>Model ids an OpenAI-compatible endpoint offers, or null when it doesn't answer.</summary>
+    public static async Task<IReadOnlyList<string>?> ListModelsAsync(string url, string apiKey, string sessionId, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + apiKey);
+        if (!string.IsNullOrWhiteSpace(sessionId)) request.Headers.TryAddWithoutValidation("x-opencode-session", sessionId);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        try
+        {
+            using var response = await (IsPrivateHost(url) ? Local : Cloud).SendAsync(request, timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+            return LocalAiDiscovery.ParseModels(await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or JsonException or UriFormatException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static string SessionFor(AiRequest r) => string.IsNullOrWhiteSpace(r.SessionId) ? OpenCodeSession : r.SessionId;
+
+    /// <summary>A server on this PC or in the local network: no proxy, and longer timeouts.</summary>
+    public static bool IsPrivateHost(string url) =>
+        Uri.TryCreate(url.Contains("://") ? url : "http://" + url, UriKind.Absolute, out var uri) && IsPrivateHost(uri);
+
+    private static bool IsPrivateHost(Uri uri)
+    {
+        if (uri.IsLoopback) return true;
+        var host = uri.Host;
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
+        if (IPAddress.TryParse(host, out var ip))
+        {
+            if (IPAddress.IsLoopback(ip)) return true;
+            var bytes = ip.GetAddressBytes();
+            if (bytes.Length == 4)
+                return bytes[0] == 10 || (bytes[0] == 192 && bytes[1] == 168) ||
+                       (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31);
+            return ip.IsIPv6LinkLocal;
+        }
+        return host.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ||
+               host.EndsWith(".lan", StringComparison.OrdinalIgnoreCase);
     }
 
     private static byte[] Json(Action<Utf8JsonWriter> write)
@@ -487,6 +624,9 @@ public static class AiClient
             }
             case ProviderIds.Local:
             case ProviderIds.Grok:
+            case ProviderIds.OpenCodeZen:
+            case ProviderIds.OpenCodeGo:
+            case ProviderIds.Compatible:
             {
                 if (root.TryGetProperty("error", out var err))
                 {
